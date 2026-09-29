@@ -16,6 +16,30 @@ Ouster PCAP + metadata and SBG BIN → synchronized ROS bag → sequential algor
 
 The bundled HDL profile uses NDT_OMP for registration and loop verification, with LM/CHOLMOD (`lm_var_cholmod`) and a Huber loop kernel. KISS-ICP remains an unconfigured placeholder.
 
+## Screenshots
+
+![Trajectory Lab results interface](docs/images/gui-results.png)
+
+*Trajectory Lab results view from an earlier exported run. This screenshot correctly identifies that run's HDL front end as FAST_GICP.*
+
+![RViz point-cloud map and estimated path](docs/images/rviz-map.png)
+
+*Example RViz point-cloud map and estimated path from project development.*
+
+## Example results
+
+The table below is a historical result from the local `variableV` dataset using RTS ground truth and Trajectopy 4.3.3. It is included as an example of the evaluation output, not as a universal algorithm ranking.
+
+| Runtime configuration | ATE mean | ATE RMS 3D | ATE median | ATE max | Mean position RPE | Matched poses |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| FAST-LIO2 | 0.0484 m | 0.0554 m | 0.0430 m | 0.1816 m | 0.3001% | 504 |
+| LIO-SAM | 0.0872 m | 0.0980 m | 0.0753 m | 0.2187 m | 0.6151% | 166 |
+| HDL Graph SLAM (FAST_GICP + LM + loops) | 0.2669 m | 0.2898 m | 0.2655 m | 0.6064 m | 1.3572% | 24 |
+
+The saved summary mislabeled HDL as NDT_OMP, but the ROS log for that run records `FAST_GICP` for both scan matching and backend registration. The table uses the runtime configuration proven by that log. It must not be cited as an NDT_OMP result. The current bundled HDL launch profile is NDT_OMP and needs a fresh Ubuntu validation run before publishing new comparative results.
+
+Evaluation used nearest temporal matching with a 0.05 s maximum difference, rigid 6-DoF alignment, and no scale, time-shift or lever-arm estimation. Position RPE used 5 m steps over an effective 5–48.664 m range. Rotational metrics are unavailable because the exported estimated trajectories contain no orientation. The machine-readable historical summary and evaluation settings are under [`results/variableV-historical`](results/variableV-historical/).
+
 ## Hardware and synchronization
 
 The project uses Ouster OS1-128 (1024 × 10), SBG Ellipse-D, and robotic total station ground truth. The team collected handheld campus recordings near the MNL library, with intended differences in speed and rotation. Motion conditions were not precisely controlled.

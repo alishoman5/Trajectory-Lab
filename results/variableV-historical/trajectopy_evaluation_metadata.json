@@ -1,0 +1,20 @@
+{
+  "trajectopy_version": "4.3.3",
+  "reference": "/home/ali/Downloads/variableV/rts_2026_07_15_09_02_02.traj",
+  "reference_path_length_m": 54.07123828,
+  "matching_method": "NEAREST_TEMPORAL",
+  "max_time_diff_s": 0.05,
+  "alignment": "rigid 6DoF translation+rotation; scale=false; time_shift=false",
+  "rpe": {
+    "pair_distance_unit": "METER",
+    "requested_min_m": 5.0,
+    "requested_max_m": 50.0,
+    "requested_step_m": 5.0,
+    "effective_min_m": 5.0,
+    "effective_max_m": 48.66411445200001,
+    "effective_step_m": 5.0,
+    "use_all_pose_pairs": true,
+    "position_unit": "% (m per 100 m)",
+    "rotation_unit": "deg/100m when orientation is available"
+  }
+}

@@ -1,0 +1,60 @@
+{
+    "alignment": {
+        "preprocessing": {
+            "min_speed": 0.0,
+            "time_start": 0.0,
+            "time_end": 0.0
+        },
+        "estimation_settings": {
+            "translation_x": true,
+            "translation_y": true,
+            "translation_z": true,
+            "rotation_x": true,
+            "rotation_y": true,
+            "rotation_z": true,
+            "scale": false,
+            "time_shift": false,
+            "leverarm_x": false,
+            "leverarm_y": false,
+            "leverarm_z": false,
+            "sensor_rotation": false
+        },
+        "stochastics": {
+            "std_xy_from": 1.0,
+            "std_z_from": 1.0,
+            "std_xy_to": 1.0,
+            "std_z_to": 1.0,
+            "std_roll_pitch": 0.017453292519943295,
+            "std_yaw": 0.017453292519943295,
+            "std_speed": 1.0,
+            "error_probability": 0.05,
+            "variance_estimation": false
+        },
+        "metric_threshold": 0.0001,
+        "time_threshold": 0.0001
+    },
+    "matching": {
+        "method": "nearest_temporal",
+        "max_time_diff": 0.05,
+        "max_distance": 0.0,
+        "max_gap_size": 10.0,
+        "k_nearest": 2
+    },
+    "relative_comparison": {
+        "pair_min_distance": 5.0,
+        "pair_max_distance": 48.66411445200001,
+        "pair_distance_step": 5.0,
+        "pair_distance_unit": "meter",
+        "use_all_pose_pairs": true
+    },
+    "approximation": {
+        "position_interval_size": 0.15,
+        "position_min_observations": 25,
+        "rotation_window_size": 0.15
+    },
+    "sorting": {
+        "voxel_size": 0.05,
+        "movement_threshold": 0.005,
+        "k_nearest": 4
+    }
+}
