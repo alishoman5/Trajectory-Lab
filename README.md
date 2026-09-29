@@ -16,7 +16,38 @@ Ouster PCAP + metadata and SBG BIN → synchronized ROS bag → sequential algor
 
 The bundled HDL profile uses NDT_OMP for registration and loop verification, with LM/CHOLMOD (`lm_var_cholmod`) and a Huber loop kernel. KISS-ICP remains an unconfigured placeholder.
 
-## Screenshots
+## Project photos
+
+![Sensor rig, onboard computer, and robotic total station](docs/images/sensor-rig-and-ground-truth.png)
+
+*Project hardware shown in the team presentation: the handheld Ouster/SBG rig, onboard computer, and robotic total station used for reference measurements.*
+
+## Presentation-reported results
+
+![Trajectory comparison for the constant-motion dataset](docs/images/presentation-constant-trajectory.png)
+
+![ATE and RPE summary across the three datasets](docs/images/presentation-results-summary.png)
+
+The presentation reports the following values. ATE is in metres and RPE is in percent, following the labels in the slides.
+
+| Dataset | Algorithm | ATE | RPE |
+| --- | --- | ---: | ---: |
+| Constant velocity and rotation | LIO-SAM | 0.077 | 0.216 |
+| Constant velocity and rotation | FAST-LIO2 | 0.119 | 0.359 |
+| Constant velocity and rotation | HDL Graph SLAM | 0.133 | 0.361 |
+| Constant velocity and rotation | KISS-ICP | 0.168 | 0.552 |
+| Variable velocity | LIO-SAM | 0.085 | 0.406 |
+| Variable velocity | FAST-LIO2 | 0.056 | 0.231 |
+| Variable velocity | HDL Graph SLAM | 0.316 | 1.394 |
+| Variable velocity | KISS-ICP | 0.281 | 1.423 |
+| Variable rotation speed | LIO-SAM | 0.074 | 0.389 |
+| Variable rotation speed | FAST-LIO2 | 0.078 | 0.340 |
+| Variable rotation speed | HDL Graph SLAM | 0.193 | 0.744 |
+| Variable rotation speed | KISS-ICP | 0.181 | 0.804 |
+
+These values were transcribed from `3rd Presentation.pptx` and have not been independently recomputed for this repository. The slides describe an earlier alignment workflow that could estimate similarity, lever-arm and time-shift parameters, so these numbers should not be mixed directly with the rigid-alignment Trajectopy example below. KISS-ICP is represented in the presentation results but is not configured in the exported application. Machine-readable values and provenance are in [`results/presentation-reported`](results/presentation-reported/).
+
+## Application screenshots
 
 ![Trajectory Lab results interface](docs/images/gui-results.png)
 
@@ -26,7 +57,7 @@ The bundled HDL profile uses NDT_OMP for registration and loop verification, wit
 
 *Example RViz point-cloud map and estimated path from project development.*
 
-## Example results
+## Example Trajectopy result
 
 The table below is a historical result from the local `variableV` dataset using RTS ground truth and Trajectopy 4.3.3. It is included as an example of the evaluation output, not as a universal algorithm ranking.
 
@@ -81,7 +112,7 @@ To add an algorithm, add a profile through the GUI or `app/algorithms.json` with
 
 Ali Shouman's reported contribution includes LIO-SAM setup and application across the collected datasets, sensor-data preparation, configuration of sensor transforms, trajectory evaluation and participation in data collection. Conversion and evaluation tools were developed with AI coding assistance. Detailed GUI authorship and team credits still need confirmation.
 
-No accuracy ranking is claimed in this package. Earlier plots have not been reproduced with this configuration, and historical ground-truth selection and timing differences prevent treating them as verified current results.
+The presentation results above are preserved as historical project evidence. They have not been reproduced with the current exported configuration, and differences in evaluation settings prevent treating them as verified current results.
 
 ## Dependencies and credits
 
@@ -94,3 +125,4 @@ No accuracy ranking is claimed in this package. Earlier plots have not been repr
 - [Livox ROS driver](https://github.com/Livox-SDK/livox_ros_driver)
 
 These are upstream projects, not algorithms authored by this toolbox's contributors. Included LIO-SAM and FAST-LIO configuration/launch material retains the corresponding license texts in `licenses/`. A license for the application itself has not yet been selected; this draft does not grant a new license over team contributions.
+

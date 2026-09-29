@@ -1,0 +1,14 @@
+dataset,algorithm,ate_m,rpe_percent
+constant_velocity_and_rotation,LIO-SAM,0.077,0.216
+constant_velocity_and_rotation,FAST-LIO2,0.119,0.359
+constant_velocity_and_rotation,HDL Graph SLAM,0.133,0.361
+constant_velocity_and_rotation,KISS-ICP,0.168,0.552
+variable_velocity,LIO-SAM,0.085,0.406
+variable_velocity,FAST-LIO2,0.056,0.231
+variable_velocity,HDL Graph SLAM,0.316,1.394
+variable_velocity,KISS-ICP,0.281,1.423
+variable_rotation_speed,LIO-SAM,0.074,0.389
+variable_rotation_speed,FAST-LIO2,0.078,0.340
+variable_rotation_speed,HDL Graph SLAM,0.193,0.744
+variable_rotation_speed,KISS-ICP,0.181,0.804
+
