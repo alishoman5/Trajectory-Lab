@@ -18,15 +18,15 @@ The bundled HDL profile uses NDT_OMP for registration and loop verification, wit
 
 ## Project photos
 
-![Sensor rig, onboard computer, and robotic total station](docs/images/sensor-rig-and-ground-truth.png)
+<img src="docs/images/sensor-rig-and-ground-truth.jpg" alt="Sensor rig, onboard computer, and robotic total station" width="900">
 
 *Project hardware shown in the team presentation: the handheld Ouster/SBG rig, onboard computer, and robotic total station used for reference measurements.*
 
 ## Presentation-reported results
 
-![Trajectory comparison for the constant-motion dataset](docs/images/presentation-constant-trajectory.png)
+<img src="docs/images/presentation-constant-trajectory.jpg" alt="Trajectory comparison for the constant-motion dataset" width="900">
 
-![ATE and RPE summary across the three datasets](docs/images/presentation-results-summary.png)
+<img src="docs/images/presentation-results-summary.jpg" alt="ATE and RPE summary across the three datasets" width="900">
 
 The presentation reports the following values. ATE is in metres and RPE is in percent, following the labels in the slides.
 
@@ -49,11 +49,11 @@ These values were transcribed from `3rd Presentation.pptx` and have not been ind
 
 ## Application screenshots
 
-![Trajectory Lab results interface](docs/images/gui-results.png)
+<img src="docs/images/gui-results.jpg" alt="Trajectory Lab results interface" width="900">
 
 *Trajectory Lab results view from an earlier exported run. This screenshot correctly identifies that run's HDL front end as FAST_GICP.*
 
-![RViz point-cloud map and estimated path](docs/images/rviz-map.png)
+<img src="docs/images/rviz-map.jpg" alt="RViz point-cloud map and estimated path" width="900">
 
 *Example RViz point-cloud map and estimated path from project development.*
 
