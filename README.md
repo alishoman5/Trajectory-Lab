@@ -53,9 +53,9 @@ These values were transcribed from `3rd Presentation.pptx` and have not been ind
 
 *Trajectory Lab results view from an earlier exported run. This screenshot correctly identifies that run's HDL front end as FAST_GICP.*
 
-<img src="docs/images/rviz-map.jpg" alt="RViz point-cloud map and estimated path" width="900">
+[▶ Watch the RViz point-cloud map and estimated-path video](docs/images/rviz-map.m4v)
 
-*Example RViz point-cloud map and estimated path from project development.*
+*RViz point-cloud map and estimated path from project development.*
 
 ## Example Trajectopy result
 
