@@ -1,0 +1,40 @@
+[
+  {
+    "id": "lio_sam",
+    "name": "LIO-SAM",
+    "launch_command": "roslaunch lio_sam run.launch",
+    "odom_topic": "/lio_sam/mapping/odometry",
+    "startup_delay": 5.0,
+    "configured": true,
+    "description": "ROS1 LIO-SAM profile used by the current project."
+  },
+  {
+    "id": "fast_lio2",
+    "name": "FAST-LIO2",
+    "launch_command": "roslaunch fast_lio mapping_ouster128_gui.launch rviz:=false",
+    "odom_topic": "/Odometry",
+    "startup_delay": 5.0,
+    "configured": true,
+    "description": "FAST-LIO2 | Ouster OS1-128 + SBG IMU"
+  },
+  {
+    "id": "kiss_icp",
+    "name": "KISS-ICP",
+    "launch_command": "",
+    "odom_topic": "/kiss/odometry",
+    "startup_delay": 3.0,
+    "configured": false,
+    "description": "Use a ROS wrapper/profile that publishes nav_msgs/Odometry."
+  },
+  {
+    "id": "hdl_graph_slam",
+    "name": "HDL Graph SLAM (NDT_OMP + LM + Loops)",
+    "launch_command": "roslaunch hdl_graph_slam hdl_graph_slam_gui.launch",
+    "odom_topic": "/hdl_graph_slam/optimized_odometry",
+    "optimized_topic": "/hdl_graph_slam/optimized_odometry",
+    "result_mode": "hdl_graph_dump",
+    "startup_delay": 6.0,
+    "configured": true,
+    "description": "hdl_graph_slam | NDT_OMP front-end + NDT_OMP loop closure + LM/CHOLMOD pose-graph optimization; compares FINAL optimized graph poses."
+  }
+]

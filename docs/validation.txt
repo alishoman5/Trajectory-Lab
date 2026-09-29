@@ -1,0 +1,1 @@
+Validation: 20 imported hashes match; 2 JSON files parse; 2 launch XML files parse; no raw sensor data or videos included. ROS runtime and numerical evaluation not tested.
