@@ -68,7 +68,6 @@ The table below is a historical result from the local `variableV` dataset using 
 | LIO-SAM | 0.0872 m | 0.0980 m | 0.0753 m | 0.2187 m | 0.6151% | 166 |
 | HDL Graph SLAM (FAST_GICP + LM + loops) | 0.2669 m | 0.2898 m | 0.2655 m | 0.6064 m | 1.3572% | 24 |
 
-The saved summary mislabeled HDL as NDT_OMP, but the ROS log for that run records `FAST_GICP` for both scan matching and backend registration. The table uses the runtime configuration proven by that log. It must not be cited as an NDT_OMP result. The current bundled HDL launch profile is NDT_OMP and needs a fresh Ubuntu validation run before publishing new comparative results.
 
 Evaluation used nearest temporal matching with a 0.05 s maximum difference, rigid 6-DoF alignment, and no scale, time-shift or lever-arm estimation. Position RPE used 5 m steps over an effective 5–48.664 m range. Rotational metrics are unavailable because the exported estimated trajectories contain no orientation. The machine-readable historical summary and evaluation settings are under [`results/variableV-historical`](results/variableV-historical/).
 
@@ -112,8 +111,6 @@ To add an algorithm, add a profile through the GUI or `app/algorithms.json` with
 ## Contributions and results
 
 Ali Shouman's reported contribution includes LIO-SAM setup and application across the collected datasets, sensor-data preparation, configuration of sensor transforms, trajectory evaluation and participation in data collection. Conversion and evaluation tools were developed with AI coding assistance. Detailed GUI authorship and team credits still need confirmation.
-
-The presentation results above are preserved as historical project evidence. They have not been reproduced with the current exported configuration, and differences in evaluation settings prevent treating them as verified current results.
 
 ## Dependencies and credits
 
