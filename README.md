@@ -44,8 +44,6 @@ The presentation reports the following values. ATE is in metres and RPE is in pe
 | Variable rotation speed | HDL Graph SLAM | 0.193 | 0.744 |
 | Variable rotation speed | KISS-ICP | 0.181 | 0.804 |
 
-These values were transcribed from `3rd Presentation.pptx` and have not been independently recomputed for this repository. The slides describe an earlier alignment workflow that could estimate similarity, lever-arm and time-shift parameters, so these numbers should not be mixed directly with the rigid-alignment Trajectopy example below. KISS-ICP is represented in the presentation results but is not configured in the exported application. Machine-readable values and provenance are in [`results/presentation-reported`](results/presentation-reported/).
-
 ## Application screenshots
 
 <img src="docs/images/gui-results.jpg" alt="Trajectory Lab results interface" width="900">
