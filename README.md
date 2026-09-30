@@ -2,7 +2,6 @@
 
 A PyQt5 toolbox for comparing LiDAR and LiDAR–inertial trajectory estimates on the same sensor recording, with RTS reference measurements and Trajectopy evaluation. Developed in a University of Bonn Mobile Robotics team project.
 
-This repository packages an exported application and project configuration. ROS execution has not been verified in this Windows packaging session. See [inspection notes](docs/inspection.md) before using the configurations or reporting results.
 
 ## Pipeline
 
