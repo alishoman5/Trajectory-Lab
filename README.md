@@ -77,6 +77,10 @@ The converter reads the PPS/NMEA settings from metadata and subtracts `nmea_leap
 
 PointCloud2 includes `x,y,z,intensity,t,reflectivity,ring,noise,range`; `t` contains relative nanoseconds within a scan. Extrinsic parameters are rig-specific: do not assume the supplied matrices are suitable for another rig.
 
+## Sharing / setup on another Ubuntu machine
+
+For a teammate or friend setting up the toolbox on another machine, use the clean-machine guide in [docs/friend-setup.md](docs/friend-setup.md). It covers cloning this repository, ROS Noetic workspace assumptions, algorithm dependencies, project profiles, the separate Trajectopy environment, and launching the GUI.
+
 ## Setup and run
 
 The exported project targets Ubuntu 20.04 / ROS Noetic. Follow [setup instructions](docs/setup.md). Dependencies are installed separately; their source trees are not included here.
