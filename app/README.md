@@ -88,3 +88,28 @@ RPE details, alignment parameters and RPE-by-distance tables. Plot previews use 
 algorithm names and high-resolution figures. The XY view is shown in a local coordinate
 frame relative to the first RTS point so large UTM offsets do not compress the plot.
 Native Trajectopy plots and CSV/JSON outputs are still preserved in the run folder.
+
+## Performance Insights update
+
+This build adds presentation-oriented analysis after the normal Trajectopy comparison.
+
+New Results tabs:
+- **Performance Insights**: moving-only ATE, speed-vs-ATE correlation, and Low/Medium/High speed ATE for every algorithm.
+- **Failure Segments**: the five worst 5 m trajectory sections per algorithm.
+- **Dataset History**: latest saved result per dataset and the best overall / low-speed / medium-speed / high-speed algorithm.
+
+New plots:
+- Errors by Distance
+- Speed Sensitivity
+- 5 m Drift by Speed
+- ATE vs Speed
+- Failure Heatmap
+
+Speed analysis automatically removes stationary start/end periods using a 0.30 m/s threshold. Bins are:
+- Low: 0.30–1.20 m/s
+- Medium: 1.20–1.60 m/s
+- High: >1.60 m/s
+
+The Results page also has **Load / Analyze saved run**. Select an old Trajectory Lab run folder and the GUI will generate the new diagnostics from its existing `.traj` results without replaying ROS bags or rerunning the algorithms.
+
+The original Trajectopy ATE/RPE tables and plots remain unchanged. Diagnostic speed/segment analysis is an additional interpretation layer and is exported to `comparison/performance_analysis.json` plus CSV/PNG files.
