@@ -1,0 +1,10 @@
+ATE plotting fix
+================
+
+- Fixed the GUI ATE-vs-time plot to show true 3D ATE magnitude:
+    sqrt(dx^2 + dy^2 + dz^2)
+  instead of plotting Trajectopy's signed X/Y/Z deviation components as separate lines.
+- The plot now shows exactly one non-negative line per algorithm.
+- Renamed the tab to "3D ATE vs Time" and the y-axis to "3D ATE magnitude [m]".
+- Existing Trajectopy numeric metrics, native plots, speed diagnostics, segment heatmap,
+  and dataset-history calculations are unchanged.
