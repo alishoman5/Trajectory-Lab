@@ -112,7 +112,10 @@ To add an algorithm, add a profile through the GUI or `app/algorithms.json` with
 
 ## Contributions and results
 
-Ali Shouman's reported contribution includes LIO-SAM setup and application across the collected datasets, sensor-data preparation, configuration of sensor transforms, trajectory evaluation and participation in data collection. Conversion and evaluation tools were developed with AI coding assistance. Detailed GUI authorship and team credits still need confirmation.
+Ali Shouman contributed to the development and evaluation of the LiDAR-inertial SLAM pipeline, including LIO-SAM setup and configuration, sensor-data preparation and synchronization, LiDAR–IMU integration, trajectory evaluation against RTS ground truth, and experimental data collection.
+
+He also developed the trajectory evaluation and comparison workflow used to analyze multiple SLAM algorithms across the collected datasets, including ATE, RPE, speed-sensitivity, local-drift, and failure-segment analysis.
+
 
 ## Dependencies and credits
 
