@@ -435,6 +435,41 @@ def save_native_plots(out, ate_results, rpe_results, alignment_results):
     return paths
 
 
+def _ate_magnitude(pos_dev, expected_samples=None):
+    """Return one non-negative 3D position-error magnitude per matched pose.
+
+    Trajectopy ``AbsoluteDeviation.pos_dev`` is component-wise in current
+    releases (dx, dy, dz).  Passing that 2-D array directly to Matplotlib
+    creates three lines per algorithm and can show negative values, which are
+    component errors rather than ATE.  This helper converts either a 1-D
+    magnitude array or a component array to the scalar Euclidean ATE.
+    """
+    err = np.asarray(pos_dev, dtype=float)
+    if err.size == 0:
+        return np.asarray([], dtype=float)
+
+    if err.ndim == 1:
+        # Some versions/backends may already provide a scalar deviation.
+        return np.abs(err)
+
+    if err.ndim == 2:
+        # Prefer the axis that agrees with the matched-pose timestamp count.
+        if expected_samples is not None:
+            if err.shape[0] == expected_samples and err.shape[1] >= 1:
+                return np.linalg.norm(err, axis=1)
+            if err.shape[1] == expected_samples and err.shape[0] >= 1:
+                return np.linalg.norm(err, axis=0)
+        # Normal Trajectopy layout is N x 3.  Be defensive about 3 x N.
+        if err.shape[1] == 3:
+            return np.linalg.norm(err, axis=1)
+        if err.shape[0] == 3:
+            return np.linalg.norm(err, axis=0)
+
+    # Last-resort defensive handling: one scalar magnitude per leading sample.
+    reshaped = err.reshape(err.shape[0], -1)
+    return np.linalg.norm(reshaped, axis=1)
+
+
 def save_gui_plots(out, ref_traj, ate_results, rpe_results, display_names):
     """Create clean high-resolution GUI previews from Trajectopy result objects.
 
@@ -469,21 +504,26 @@ def save_gui_plots(out, ref_traj, ate_results, rpe_results, display_names):
     plt.close(fig)
     paths["xy"] = str(xy_path)
 
-    # 2) Position ATE versus time. Values come directly from Trajectopy's
-    # AbsoluteDeviation result; only visualization is custom.
+    # 2) 3D position ATE magnitude versus time.  Trajectopy exposes the
+    # component-wise position deviation vector; convert it to ||[dx,dy,dz]||
+    # so this plot is a true non-negative ATE curve (one line per algorithm).
     fig, ax = plt.subplots(figsize=(12.5, 6.4))
+    plotted = 0
     for label, ate in zip(display_names, ate_results):
-        err = np.asarray(ate.abs_dev.pos_dev, dtype=float)
         ts = np.asarray(ate.trajectory.timestamps, dtype=float)
+        err = _ate_magnitude(ate.abs_dev.pos_dev, expected_samples=len(ts))
         n = min(len(err), len(ts))
         if n == 0:
             continue
         ax.plot(ts[:n] - ts[0], err[:n], linewidth=1.7, label=label)
-    ax.set_title("Absolute Trajectory Error (ATE) vs Time", fontsize=15, pad=12)
+        plotted += 1
+    ax.set_title("3D Absolute Trajectory Error (ATE) vs Time", fontsize=15, pad=12)
     ax.set_xlabel("Time from first matched pose [s]", fontsize=11)
-    ax.set_ylabel("3D position error [m]", fontsize=11)
+    ax.set_ylabel("3D ATE magnitude [m]", fontsize=11)
+    ax.set_ylim(bottom=0.0)
     ax.grid(True, alpha=0.30)
-    ax.legend(loc="best", fontsize=9, frameon=True)
+    if plotted:
+        ax.legend(loc="best", fontsize=9, frameon=True)
     fig.tight_layout()
     ate_path = out / "gui_ate_vs_time.png"
     fig.savefig(ate_path, dpi=220, bbox_inches="tight", pad_inches=0.12)
