@@ -221,6 +221,14 @@ class PipelineWorker(QObject):
 
             self._emit(f"Run directory: {run_dir}")
 
+            # Persist run identity so the GUI can build a cross-dataset leaderboard.
+            (run_dir / "run_metadata.json").write_text(json.dumps({
+                "dataset_name": dataset_name,
+                "created_at": datetime.now().isoformat(),
+                "rts": str(Path(self.dataset["rts"]).resolve()),
+                "algorithms": [a.get("name", a.get("id", "")) for a in self.algorithms],
+            }, indent=2), encoding="utf-8")
+
             reuse = bool(self.options.get("reuse_sensor_bag", True))
             if reuse and sensor_bag.exists():
                 self.progress.emit(10, "Reusing synchronized sensor bag")
@@ -390,12 +398,37 @@ class PipelineWorker(QObject):
             metrics_file = results_dir / "summary_metrics.json"
             metrics = json.loads(metrics_file.read_text())
 
+            # Presentation-oriented post analysis: moving-only speed sensitivity,
+            # worst trajectory sections and cross-dataset leaderboard.  This uses
+            # only the already-created .traj files, so no extra ROS replay is needed.
+            self.progress.emit(94, "Analyzing algorithm strengths and failure regions")
+            diagnostics = {}
+            diagnostic_script = self.project_dir / "performance_analysis.py"
+            if diagnostic_script.exists():
+                try:
+                    diagnostic_cmd = (
+                        f"python3 {shlex.quote(str(diagnostic_script))} "
+                        f"--manifest {shlex.quote(str(manifest_path))} "
+                        f"--metrics {shlex.quote(str(metrics_file))} "
+                        f"--out-dir {shlex.quote(str(results_dir))} "
+                        f"--dataset-name {shlex.quote(dataset_name)} "
+                        f"--output-root {shlex.quote(str(root_out))}"
+                    )
+                    self._run(diagnostic_cmd, run_dir)
+                    diagnostic_file = results_dir / "performance_analysis.json"
+                    if diagnostic_file.exists():
+                        diagnostics = json.loads(diagnostic_file.read_text())
+                except Exception as diag_error:
+                    # Diagnostics are additive; the core Trajectopy result remains valid.
+                    self._emit(f"WARNING: performance diagnostics skipped: {diag_error}")
+
             self.progress.emit(100, "Finished")
             self.finished.emit({
                 "run_dir": str(run_dir),
                 "sensor_bag": str(sensor_bag),
                 "metrics": metrics,
                 "results_dir": str(results_dir),
+                "diagnostics": diagnostics,
                 "plots": {
                     # Clean GUI previews generated from Trajectopy result objects.
                     "xy": str(results_dir / "combined_xy.png"),
