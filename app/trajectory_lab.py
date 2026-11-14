@@ -503,174 +503,110 @@ class MainWindow(QMainWindow):
     def make_results_page(self):
         page, l = self.page_shell()
         l.addWidget(self.title_block(
-            "Trajectory Evaluation Results",
-            "Evaluation backend: Trajectopy • nearest-timestamp pose matching • rigid 6-DoF alignment to RTS (translation + rotation, no scale) • ATE and distance-based RPE."
+            "Trajectory Evaluation",
+            "Focused view: overall accuracy, where errors occur, and which motion conditions are associated with them. "
+            "Detailed Trajectopy audit files remain available under comparison/raw/."
         ))
 
-        note = QLabel("Ranking metric: ATE mean position error. Lower values are better. Native Trajectopy result files and plots are also exported to the run folder.")
+        note = QLabel(
+            "ATE and RPE come from Trajectopy after nearest-timestamp matching and rigid 6-DoF alignment to RTS "
+            "(translation + rotation, no scale). Motion correlations are diagnostic associations, not proof of causation."
+        )
         note.setWordWrap(True)
-        note.setStyleSheet("background:#151c2b;border:1px solid #2d3a52;border-radius:8px;padding:9px 12px;color:#b9c6da;")
+        note.setStyleSheet(
+            "background:#151c2b;border:1px solid #2d3a52;border-radius:8px;"
+            "padding:9px 12px;color:#b9c6da;"
+        )
         l.addWidget(note)
 
         self.results_tabs = QTabWidget()
         self.results_tabs.setMinimumHeight(205)
 
-        # Main comparison/ranking table. Units are kept in the headers so cells stay compact.
+        # 1) Is the algorithm accurate overall?
         overview = QWidget()
         ov = QVBoxLayout(overview)
         ov.setContentsMargins(6, 6, 6, 6)
-        self.results_table = QTableWidget(0, 10)
+        self.results_table = QTableWidget(0, 7)
         self.results_table.setHorizontalHeaderLabels([
-            "Rank", "Algorithm", "ATE Mean [m]", "ATE RMS 3D [m]",
-            "ATE Median [m]", "ATE Max [m]", "RPE Pos. Drift [%]",
-            "RPE Rot. Drift [deg/100m]", "RPE Pairs", "Matched Poses"
+            "Rank", "Algorithm", "ATE Mean [m]", "ATE RMS [m]",
+            "ATE Max [m]", "RPE Pos. Drift [%]", "Matched Poses"
         ])
         self.prepare_table(self.results_table, algorithm_column=1)
         ov.addWidget(self.results_table)
         self.results_tabs.addTab(overview, "Overview")
 
-        # Presentation-oriented interpretation of the same run.  These tables
-        # are generated for every algorithm from common RTS speed/distance data.
-        insights_page = QWidget()
-        insights_l = QVBoxLayout(insights_page)
-        self.findings_label = QLabel("Run the algorithms to generate automatic performance findings.")
+        # 2) Under which motion conditions does error increase?
+        diagnostics_page = QWidget()
+        diagnostics_l = QVBoxLayout(diagnostics_page)
+        self.findings_label = QLabel("Run or load a dataset to generate diagnostic findings.")
         self.findings_label.setWordWrap(True)
         self.findings_label.setStyleSheet(
             "background:#151c2b;border:1px solid #2d3a52;border-radius:8px;"
             "padding:12px;color:#d7e3f5;"
         )
-        insights_l.addWidget(self.findings_label)
+        diagnostics_l.addWidget(self.findings_label)
         self.insights_table = QTableWidget(0, 8)
         self.insights_table.setHorizontalHeaderLabels([
-            "Algorithm", "Moving ATE Mean [m]", "Speed↔ATE r",
-            "Low ATE [m]", "Medium ATE [m]", "High ATE [m]",
-            "High−Low [m]", "Moving Poses"
+            "Algorithm", "Moving ATE [m]", "Speed↔ATE r", "Accel↔ATE r",
+            "Low-speed ATE [m]", "Medium-speed ATE [m]", "High-speed ATE [m]", "Moving Poses"
         ])
         self.prepare_table(self.insights_table, algorithm_column=0)
-        insights_l.addWidget(self.insights_table)
-        self.results_tabs.addTab(insights_page, "Performance Insights")
+        diagnostics_l.addWidget(self.insights_table)
+        self.results_tabs.addTab(diagnostics_page, "Motion Diagnostics")
 
+        # 3) Where are the worst sections?
         failure_page = QWidget()
         failure_l = QVBoxLayout(failure_page)
         failure_note = QLabel(
-            "Worst 5 m sections for each algorithm. This shows where an algorithm failed, "
-            "instead of reducing the whole dataset to one ATE number."
+            "Worst 5 m sections. Compare their error, speed and acceleration with good sections before forming a failure hypothesis."
         )
         failure_note.setObjectName("subtitle")
         failure_note.setWordWrap(True)
         failure_l.addWidget(failure_note)
-        self.failure_table = QTableWidget(0, 8)
+        self.failure_table = QTableWidget(0, 9)
         self.failure_table.setHorizontalHeaderLabels([
             "Algorithm", "Rank", "Start [m]", "End [m]", "Mean ATE [m]",
-            "Max ATE [m]", "Mean Speed [m/s]", "Poses"
+            "Max ATE [m]", "Mean Speed [m/s]", "Mean Accel [m/s²]", "Poses"
         ])
         self.prepare_table(self.failure_table, algorithm_column=0)
         failure_l.addWidget(self.failure_table)
         self.results_tabs.addTab(failure_page, "Failure Segments")
 
-        history_page = QWidget()
-        history_l = QVBoxLayout(history_page)
-        history_top = QHBoxLayout()
-        history_note = QLabel(
-            "Latest saved run for each dataset. Use this to answer: which algorithm was best on which dataset?"
-        )
-        history_note.setObjectName("subtitle")
-        history_note.setWordWrap(True)
-        refresh_history_btn = QPushButton("Refresh saved datasets")
-        refresh_history_btn.clicked.connect(self.refresh_dataset_history)
-        history_top.addWidget(history_note, 1)
-        history_top.addWidget(refresh_history_btn)
-        history_l.addLayout(history_top)
-        self.history_table = QTableWidget(0, 9)
-        self.history_table.setHorizontalHeaderLabels([
-            "Dataset", "Best Overall", "ATE Mean [m]", "ATE RMS [m]",
-            "Best Low Speed", "Best Medium Speed", "Best High Speed",
-            "Algorithms Tested", "Latest Run"
-        ])
-        self.prepare_table(self.history_table, algorithm_column=0)
-        history_l.addWidget(self.history_table)
-        self.results_tabs.addTab(history_page, "Dataset History")
-
-        ate_page = QWidget()
-        ate_l = QVBoxLayout(ate_page)
-        self.ate_properties_table = QTableWidget(0, 3)
-        self.ate_properties_table.setHorizontalHeaderLabels(["Algorithm", "ATE metric (Trajectopy)", "Value"])
-        self.prepare_detail_table(self.ate_properties_table)
-        ate_l.addWidget(self.ate_properties_table)
-        self.results_tabs.addTab(ate_page, "ATE Details")
-
-        rpe_page = QWidget()
-        rpe_l = QVBoxLayout(rpe_page)
-        self.rpe_properties_table = QTableWidget(0, 3)
-        self.rpe_properties_table.setHorizontalHeaderLabels(["Algorithm", "RPE metric (Trajectopy)", "Value"])
-        self.prepare_detail_table(self.rpe_properties_table)
-        rpe_l.addWidget(self.rpe_properties_table)
-        self.results_tabs.addTab(rpe_page, "RPE Details")
-
-        alignment_page = QWidget()
-        alignment_l = QVBoxLayout(alignment_page)
-        self.alignment_properties_table = QTableWidget(0, 3)
-        self.alignment_properties_table.setHorizontalHeaderLabels(["Algorithm", "Alignment parameter", "Value"])
-        self.prepare_detail_table(self.alignment_properties_table)
-        alignment_l.addWidget(self.alignment_properties_table)
-        self.results_tabs.addTab(alignment_page, "Alignment")
-
-        bucket_page = QWidget()
-        bucket_l = QVBoxLayout(bucket_page)
-        self.rpe_buckets_table = QTableWidget(0, 13)
-        self.rpe_buckets_table.setHorizontalHeaderLabels([
-            "Algorithm", "Distance [m]", "Pairs",
-            "Pos mean [%]", "Pos min [%]", "Pos median [%]", "Pos max [%]", "Pos std [%]",
-            "Rot mean [deg/100m]", "Rot min", "Rot median", "Rot max", "Rot std"
-        ])
-        self.rpe_buckets_table.setAlternatingRowColors(True)
-        self.rpe_buckets_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self.rpe_buckets_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.rpe_buckets_table.verticalHeader().setVisible(False)
-        self.rpe_buckets_table.verticalHeader().setDefaultSectionSize(32)
-        bucket_l.addWidget(self.rpe_buckets_table)
-        self.results_tabs.addTab(bucket_page, "RPE vs Distance")
-
         l.addWidget(self.results_tabs, 0)
 
+        # Only plots that answer a concrete evaluation question are shown.
         self.plot_tabs = QTabWidget()
         self.plot_tabs.setMinimumHeight(440)
         self.plot_xy = self.image_label()
-        self.plot_ate = self.image_label()
         self.plot_rpe = self.image_label()
-        self.plot_rpe_time = self.image_label()
-        self.plot_edf = self.image_label()
-        self.plot_ate_bars = self.image_label()
-        self.plot_ate_3d = self.image_label()
-        self.plot_z = self.image_label()
         self.plot_diag_distance = self.image_label()
-        self.plot_diag_speed = self.image_label()
-        self.plot_diag_rpe = self.image_label()
         self.plot_diag_scatter = self.image_label()
+        self.plot_diag_acceleration = self.image_label()
         self.plot_diag_heatmap = self.image_label()
-        self.plot_tabs.addTab(self.wrap_image(self.plot_xy), "Trajectory (XY)")
-        self.plot_tabs.addTab(self.wrap_image(self.plot_ate), "3D ATE vs Time")
+
+        self.plot_tabs.addTab(self.wrap_image(self.plot_xy), "Trajectory vs RTS")
+        self.plot_tabs.addTab(self.wrap_image(self.plot_diag_distance), "ATE Along Route")
         self.plot_tabs.addTab(self.wrap_image(self.plot_rpe), "RPE vs Distance")
-        self.plot_tabs.addTab(self.wrap_image(self.plot_rpe_time), "RPE vs Time")
-        self.plot_tabs.addTab(self.wrap_image(self.plot_edf), "ATE EDF")
-        self.plot_tabs.addTab(self.wrap_image(self.plot_ate_bars), "ATE Summary")
-        self.plot_tabs.addTab(self.wrap_image(self.plot_ate_3d), "ATE 3D")
-        self.plot_tabs.addTab(self.wrap_image(self.plot_z), "Elevation (Z)")
-        self.plot_tabs.addTab(self.wrap_image(self.plot_diag_distance), "Errors by Distance")
-        self.plot_tabs.addTab(self.wrap_image(self.plot_diag_speed), "Speed Sensitivity")
-        self.plot_tabs.addTab(self.wrap_image(self.plot_diag_rpe), "5 m Drift by Speed")
         self.plot_tabs.addTab(self.wrap_image(self.plot_diag_scatter), "ATE vs Speed")
+        self.plot_tabs.addTab(self.wrap_image(self.plot_diag_acceleration), "ATE vs Acceleration")
         self.plot_tabs.addTab(self.wrap_image(self.plot_diag_heatmap), "Failure Heatmap")
         l.addWidget(self.plot_tabs, 1)
 
         row = QHBoxLayout()
         self.load_run_btn = QPushButton("Load / Analyze saved run")
         self.load_run_btn.clicked.connect(self.load_saved_run)
+        self.self_test_btn = QPushButton("Run evaluator self-test")
+        self.self_test_btn.clicked.connect(self.run_evaluator_self_test)
         self.open_output_btn = QPushButton("Open run folder")
         self.open_output_btn.setEnabled(False)
         self.open_output_btn.clicked.connect(self.open_output)
+        self.open_raw_btn = QPushButton("Open raw audit files")
+        self.open_raw_btn.setEnabled(False)
+        self.open_raw_btn.clicked.connect(self.open_raw_output)
         row.addWidget(self.load_run_btn)
+        row.addWidget(self.self_test_btn)
         row.addWidget(self.open_output_btn)
+        row.addWidget(self.open_raw_btn)
         row.addStretch(1)
         l.addLayout(row)
         return page
@@ -947,43 +883,37 @@ class MainWindow(QMainWindow):
         self.last_run = result
         self.populate_results(result["metrics"])
         self.populate_diagnostics(result.get("diagnostics", {}))
+
         self.load_plot(self.plot_xy, result["plots"].get("xy", ""))
-        self.load_plot(self.plot_ate, result["plots"].get("ate", result["plots"].get("error", "")))
         self.load_plot(self.plot_rpe, result["plots"].get("rpe", ""))
-        self.load_plot(self.plot_rpe_time, result["plots"].get("rpe_time", ""))
-        self.load_plot(self.plot_edf, result["plots"].get("ate_edf", ""))
-        self.load_plot(self.plot_ate_bars, result["plots"].get("ate_bars_position", ""))
-        self.load_plot(self.plot_ate_3d, result["plots"].get("ate_3d", ""))
-        self.load_plot(self.plot_z, result["plots"].get("z", ""))
+
         diag_plots = result.get("diagnostics", {}).get("plots", {})
         self.load_plot(self.plot_diag_distance, diag_plots.get("ate_distance", ""))
-        self.load_plot(self.plot_diag_speed, diag_plots.get("speed_ate", ""))
-        self.load_plot(self.plot_diag_rpe, diag_plots.get("speed_rpe", ""))
         self.load_plot(self.plot_diag_scatter, diag_plots.get("ate_speed", ""))
+        self.load_plot(self.plot_diag_acceleration, diag_plots.get("ate_acceleration", ""))
         self.load_plot(self.plot_diag_heatmap, diag_plots.get("segment_heatmap", ""))
-        self.refresh_dataset_history()
+
         self.open_output_btn.setEnabled(True)
+        self.open_raw_btn.setEnabled(True)
         self.progress_label.setText("Finished")
         self.change_page(3)
 
     def populate_results(self, metrics):
         self.results_table.setRowCount(len(metrics))
         for row, m in enumerate(metrics):
-            ate = m.get("ate", {})
-            rpe = m.get("rpe", {})
+            ate = m.get("ate", {}) or {}
+            rpe = m.get("rpe", {}) or {}
             ate_mean = ate.get("pos_mean_m", m.get("ate_mean_m", m.get("mean_error_m", 0.0)))
             rms_3d = ate.get("pos_rms_m", m.get("rms_3d_m", m.get("ate_rmse_m", 0.0)))
-            median = ate.get("pos_median_m", m.get("median_error_m", 0.0))
             maxerr = ate.get("pos_max_m", m.get("max_error_m", 0.0))
             rpe_pos = rpe.get("mean_position_drift", m.get("rpe_position"))
-            rpe_pos_unit = rpe.get("position_drift_unit", m.get("rpe_position_unit", "%"))
-            rpe_rot = rpe.get("mean_rotation_drift_deg_per_100m", m.get("rpe_rotation_deg_per_100m"))
             vals = [
-                str(m.get("rank", row + 1)), m.get("name", ""),
-                f"{ate_mean:.4f}", f"{rms_3d:.4f}", f"{median:.4f}", f"{maxerr:.4f}",
-                (f"{rpe_pos:.4f}" if rpe_pos is not None else "N/A"),
-                (f"{rpe_rot:.4f}" if rpe_rot is not None else "N/A"),
-                str(rpe.get("num_pairs_total", m.get("rpe_pairs", 0))),
+                str(m.get("rank", row + 1)),
+                m.get("name", ""),
+                f"{float(ate_mean):.4f}",
+                f"{float(rms_3d):.4f}",
+                f"{float(maxerr):.4f}",
+                "N/A" if rpe_pos is None else f"{float(rpe_pos):.4f}",
                 str(m.get("matched_samples", 0)),
             ]
             for col, v in enumerate(vals):
@@ -992,42 +922,15 @@ class MainWindow(QMainWindow):
                 self.results_table.setItem(row, col, item)
         self.results_table.resizeRowsToContents()
 
-        self.populate_property_table(self.ate_properties_table, metrics, "ate_properties")
-        self.populate_property_table(self.rpe_properties_table, metrics, "rpe_properties")
-        self.populate_property_table(self.alignment_properties_table, metrics, "alignment_properties")
-
-        bucket_rows = []
-        for m in metrics:
-            for b in m.get("rpe", {}).get("per_distance", []):
-                bucket_rows.append((m.get("name", ""), b))
-        self.rpe_buckets_table.setRowCount(len(bucket_rows))
-        for row, (name, b) in enumerate(bucket_rows):
-            def fmt(v, nd=4):
-                return "N/A" if v is None else f"{v:.{nd}f}"
-            vals = [
-                name, fmt(b.get("distance_m"), 2), str(b.get("pairs", 0)),
-                fmt(b.get("pos_mean")), fmt(b.get("pos_min")), fmt(b.get("pos_median")),
-                fmt(b.get("pos_max")), fmt(b.get("pos_std")),
-                fmt(b.get("rot_mean_deg_per_100m")), fmt(b.get("rot_min_deg_per_100m")),
-                fmt(b.get("rot_median_deg_per_100m")), fmt(b.get("rot_max_deg_per_100m")),
-                fmt(b.get("rot_std_deg_per_100m")),
-            ]
-            for col, v in enumerate(vals):
-                item = QTableWidgetItem(v)
-                item.setTextAlignment(Qt.AlignCenter if col != 0 else Qt.AlignLeft | Qt.AlignVCenter)
-                self.rpe_buckets_table.setItem(row, col, item)
-        self.rpe_buckets_table.resizeColumnsToContents()
-
     def populate_diagnostics(self, diagnostics):
-        """Populate presentation-oriented diagnostic tables for the current run."""
+        """Populate focused motion and failure diagnostics for every algorithm."""
         diagnostics = diagnostics or {}
         findings = diagnostics.get("findings", []) or []
         if findings:
             self.findings_label.setText("\n".join(f"• {x}" for x in findings))
         else:
             self.findings_label.setText(
-                "Performance diagnostics were not generated for this run. "
-                "Core Trajectopy results above are still valid."
+                "Diagnostics are unavailable for this run. Core Trajectopy ATE/RPE results remain valid."
             )
 
         algorithms = diagnostics.get("algorithms", []) or []
@@ -1037,18 +940,19 @@ class MainWindow(QMainWindow):
             def bmean(key):
                 v = (bins.get(key, {}) or {}).get("mean")
                 return None if v is None else float(v)
+
             low, medium, high = bmean("low"), bmean("medium"), bmean("high")
-            delta = (high - low) if high is not None and low is not None else None
             moving_mean = (a.get("moving_ate", {}) or {}).get("mean")
-            corr = a.get("speed_ate_correlation")
+            speed_corr = a.get("speed_ate_correlation")
+            accel_corr = a.get("acceleration_ate_correlation")
             vals = [
                 a.get("name", ""),
                 "N/A" if moving_mean is None else f"{float(moving_mean):.4f}",
-                "N/A" if corr is None else f"{float(corr):+.3f}",
+                "N/A" if speed_corr is None else f"{float(speed_corr):+.3f}",
+                "N/A" if accel_corr is None else f"{float(accel_corr):+.3f}",
                 "N/A" if low is None else f"{low:.4f}",
                 "N/A" if medium is None else f"{medium:.4f}",
                 "N/A" if high is None else f"{high:.4f}",
-                "N/A" if delta is None else f"{delta:+.4f}",
                 str(a.get("moving_poses", 0)),
             ]
             for col, v in enumerate(vals):
@@ -1070,6 +974,7 @@ class MainWindow(QMainWindow):
                 f"{float(seg.get('mean_ate_m', 0.0)):.4f}",
                 f"{float(seg.get('max_ate_m', 0.0)):.4f}",
                 f"{float(seg.get('mean_speed_m_s', 0.0)):.3f}",
+                "N/A" if seg.get("mean_acceleration_m_s2") is None else f"{float(seg.get('mean_acceleration_m_s2')):.3f}",
                 str(seg.get("poses", 0)),
             ]
             for col, v in enumerate(vals):
@@ -1237,6 +1142,49 @@ class MainWindow(QMainWindow):
     def open_output(self):
         if self.last_run:
             QDesktopServices.openUrl(QUrl.fromLocalFile(self.last_run["run_dir"]))
+
+    def open_raw_output(self):
+        if not self.last_run:
+            return
+        raw_dir = Path(self.last_run.get("results_dir", Path(self.last_run["run_dir"]) / "comparison")) / "raw"
+        if raw_dir.is_dir():
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(raw_dir)))
+        else:
+            QMessageBox.information(self, "Raw audit files", "No raw audit folder exists for this run.")
+
+    def run_evaluator_self_test(self):
+        """Run deterministic synthetic checks against the same evaluator used by the GUI."""
+        script = APP_DIR / "validate_evaluator.py"
+        if not script.is_file():
+            QMessageBox.warning(self, "Evaluator self-test", f"Missing {script.name}")
+            return
+
+        candidates = [
+            os.environ.get("TRAJECTOPY_PYTHON", "").strip(),
+            str(Path.home() / ".venvs" / "trajectory_lab_trajectopy" / "bin" / "python"),
+            sys.executable,
+        ]
+        python_bin = next((p for p in candidates if p and Path(p).is_file()), sys.executable)
+        env = os.environ.copy()
+        env.pop("PYTHONPATH", None)
+        env.pop("PYTHONHOME", None)
+        try:
+            proc = subprocess.run(
+                [python_bin, str(script)],
+                cwd=str(APP_DIR),
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=120,
+            )
+            self.append_log(proc.stdout)
+            if proc.returncode == 0:
+                QMessageBox.information(self, "Evaluator self-test", "PASS\n\n" + proc.stdout[-2500:])
+            else:
+                QMessageBox.critical(self, "Evaluator self-test", "FAIL\n\n" + proc.stdout[-3500:])
+        except Exception as e:
+            QMessageBox.critical(self, "Evaluator self-test", str(e))
 
 
 def main():
