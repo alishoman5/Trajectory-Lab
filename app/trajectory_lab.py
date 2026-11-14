@@ -548,7 +548,7 @@ class MainWindow(QMainWindow):
         diagnostics_l.addWidget(self.findings_label)
         self.insights_table = QTableWidget(0, 10)
         self.insights_table.setHorizontalHeaderLabels([
-            "Algorithm", "Moving ATE [m]", "Speed↔ATE r", "RTS Accel↔ATE r",
+            "Algorithm", "Moving ATE [m]", "Speed↔ATE r", "Ref Accel↔ATE r",
             "IMU Accel↔ATE r", "Angular↔ATE r",
             "Low-speed ATE [m]", "Medium-speed ATE [m]", "High-speed ATE [m]", "Moving Poses"
         ])
@@ -568,7 +568,7 @@ class MainWindow(QMainWindow):
         self.failure_table = QTableWidget(0, 11)
         self.failure_table.setHorizontalHeaderLabels([
             "Algorithm", "Rank", "Start [m]", "End [m]", "Mean ATE [m]",
-            "Max ATE [m]", "Mean Speed [m/s]", "Mean RTS Accel [m/s²]",
+            "Max ATE [m]", "Mean Speed [m/s]", "Mean Ref Accel [m/s²]",
             "Mean IMU Accel [m/s²]", "Mean Angular [rad/s]", "Poses"
         ])
         self.prepare_table(self.failure_table, algorithm_column=0)
@@ -593,7 +593,7 @@ class MainWindow(QMainWindow):
         self.plot_tabs.addTab(self.wrap_image(self.plot_diag_distance), "ATE Along Route")
         self.plot_tabs.addTab(self.wrap_image(self.plot_rpe), "RPE vs Distance")
         self.plot_tabs.addTab(self.wrap_image(self.plot_diag_scatter), "ATE vs Speed")
-        self.plot_tabs.addTab(self.wrap_image(self.plot_diag_acceleration), "ATE vs RTS Acceleration")
+        self.plot_tabs.addTab(self.wrap_image(self.plot_diag_acceleration), "ATE vs Reference Acceleration")
         self.plot_tabs.addTab(self.wrap_image(self.plot_diag_imu_acceleration), "ATE vs IMU Acceleration")
         self.plot_tabs.addTab(self.wrap_image(self.plot_diag_angular), "ATE vs Angular Velocity")
         self.plot_tabs.addTab(self.wrap_image(self.plot_diag_heatmap), "Failure Heatmap")
