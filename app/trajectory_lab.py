@@ -589,7 +589,7 @@ class MainWindow(QMainWindow):
         self.plot_diag_angular = self.image_label()
         self.plot_diag_heatmap = self.image_label()
 
-        self.plot_tabs.addTab(self.wrap_image(self.plot_xy), "Trajectory vs RTS")
+        self.plot_tabs.addTab(self.wrap_image(self.plot_xy), "Trajectory vs Reference")
         self.plot_tabs.addTab(self.wrap_image(self.plot_diag_distance), "ATE Along Route")
         self.plot_tabs.addTab(self.wrap_image(self.plot_rpe), "RPE vs Distance")
         self.plot_tabs.addTab(self.wrap_image(self.plot_diag_scatter), "ATE vs Speed")
