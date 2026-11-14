@@ -470,7 +470,7 @@ def _ate_magnitude(pos_dev, expected_samples=None):
     return np.linalg.norm(reshaped, axis=1)
 
 
-def save_gui_plots(out, ref_traj, ate_results, rpe_results, display_names):
+def save_gui_plots(out, ref_traj, ate_results, rpe_results, display_names, reference_label="Reference"):
     """Create clean high-resolution GUI previews from Trajectopy result objects.
 
     Trajectopy remains the evaluation backend. These figures only present its
@@ -487,14 +487,14 @@ def save_gui_plots(out, ref_traj, ate_results, rpe_results, display_names):
     # offsets and makes centimetre/decimetre deviations visually readable.
     fig, ax = plt.subplots(figsize=(12.5, 7.2))
     ax.plot(ref_xyz[:, 0] - origin_xy[0], ref_xyz[:, 1] - origin_xy[1],
-            linewidth=2.8, label="RTS Ground Truth")
+            linewidth=2.8, label=reference_label)
     for label, ate in zip(display_names, ate_results):
         xyz = np.asarray(ate.trajectory.positions.xyz, dtype=float)
         ax.plot(xyz[:, 0] - origin_xy[0], xyz[:, 1] - origin_xy[1],
                 linewidth=1.8, label=label)
-    ax.set_title("Aligned Trajectories vs RTS Ground Truth", fontsize=15, pad=12)
-    ax.set_xlabel("East displacement from RTS start [m]", fontsize=11)
-    ax.set_ylabel("North displacement from RTS start [m]", fontsize=11)
+    ax.set_title(f"Aligned Trajectories vs {reference_label}", fontsize=15, pad=12)
+    ax.set_xlabel("East displacement from reference start [m]", fontsize=11)
+    ax.set_ylabel("North displacement from reference start [m]", fontsize=11)
     ax.axis("equal")
     ax.grid(True, alpha=0.30)
     ax.legend(loc="best", fontsize=9, frameon=True)
@@ -553,14 +553,14 @@ def save_gui_plots(out, ref_traj, ate_results, rpe_results, display_names):
 
     # 4) Elevation comparison relative to the RTS start height.
     fig, ax = plt.subplots(figsize=(12.5, 6.2))
-    ax.plot(ref_t - ref_t[0], ref_xyz[:, 2] - origin_z, linewidth=2.6, label="RTS Ground Truth")
+    ax.plot(ref_t - ref_t[0], ref_xyz[:, 2] - origin_z, linewidth=2.6, label=reference_label)
     for label, ate in zip(display_names, ate_results):
         ts = np.asarray(ate.trajectory.timestamps, dtype=float)
         xyz = np.asarray(ate.trajectory.positions.xyz, dtype=float)
         ax.plot(ts - ref_t[0], xyz[:, 2] - origin_z, linewidth=1.7, label=label)
     ax.set_title("Elevation Comparison", fontsize=15, pad=12)
-    ax.set_xlabel("Time from RTS start [s]", fontsize=11)
-    ax.set_ylabel("Height relative to RTS start [m]", fontsize=11)
+    ax.set_xlabel("Time from reference start [s]", fontsize=11)
+    ax.set_ylabel("Height relative to reference start [m]", fontsize=11)
     ax.grid(True, alpha=0.30)
     ax.legend(loc="best", fontsize=9, frameon=True)
     fig.tight_layout()
@@ -590,6 +590,8 @@ def main():
     audit.mkdir(parents=True, exist_ok=True)
 
     ref_path = Path(manifest["rts"])
+    reference_label = manifest.get("reference_label", "RTS Ground Truth")
+    reference_source = manifest.get("reference_source", "RTS")
     ref_traj = tpy.Trajectory.from_file(str(ref_path))
     ref_xyz = np.asarray(ref_traj.positions.xyz, dtype=float)
     ref_t = np.asarray(ref_traj.timestamps, dtype=float)
@@ -605,6 +607,12 @@ def main():
     eval_meta = {
         "trajectopy_version": safe_version(),
         "reference": str(ref_path),
+        "reference_label": reference_label,
+        "reference_source": reference_source,
+        "reference_metadata": manifest.get("reference_metadata", {}),
+        "reference_label": reference_label,
+        "reference_source": reference_source,
+        "reference_metadata": manifest.get("reference_metadata", {}),
         "reference_path_length_m": ref_length,
         "matching_method": "NEAREST_TEMPORAL",
         "max_time_diff_s": args.max_dt,
@@ -639,6 +647,8 @@ def main():
         metrics, ate_result, rpe_result, alignment_result = evaluate_one(
             ref_traj, est_path, name, alg_id, processing_settings, audit
         )
+        metrics["reference_label"] = reference_label
+        metrics["reference_source"] = reference_source
         metrics["bag"] = est.get("bag", "")
         metrics["topic"] = est.get("topic", "")
         metrics["traj"] = str(est_path)
@@ -667,6 +677,7 @@ def main():
 
     with (out / "summary_metrics.txt").open("w", encoding="utf-8") as f:
         f.write(f"Evaluation backend: Trajectopy {safe_version()}\n")
+        f.write(f"Reference: {reference_label} ({reference_source})\n")
         f.write("Matching: NEAREST_TEMPORAL\n")
         f.write(f"Max time difference: {args.max_dt:.6f} s\n")
         f.write("Alignment: translation + rotation (6 DoF), scale disabled, time-shift disabled\n")
@@ -733,7 +744,10 @@ def main():
     # Clean, high-resolution GUI previews based on Trajectopy result objects.
     # Native Trajectopy figures above remain available in the run folder.
     display_names = [est["name"] for est in manifest["estimates"]]
-    gui_plots = save_gui_plots(out, ref_traj, ate_results, rpe_results, display_names)
+    gui_plots = save_gui_plots(
+        out, ref_traj, ate_results, rpe_results, display_names,
+        reference_label=reference_label,
+    )
     native_plots.update({f"gui_{k}": v for k, v in gui_plots.items()})
 
     # Compatibility alias for old GUI versions.
