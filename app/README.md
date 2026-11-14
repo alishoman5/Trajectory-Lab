@@ -44,6 +44,7 @@ Shows:
 - moving-only ATE
 - speed ↔ ATE correlation
 - acceleration ↔ ATE correlation
+- measured SBG angular-velocity ↔ ATE correlation
 - low / medium / high-speed ATE
 
 The correlations are diagnostic associations, not proof of causation.
@@ -66,7 +67,8 @@ The GUI shows six plots:
 3. RPE vs Distance
 4. ATE vs Speed
 5. ATE vs Acceleration
-6. Failure Heatmap
+6. ATE vs Angular Velocity
+7. Failure Heatmap
 
 Detailed Trajectopy properties, aligned trajectories, covariance/correlation plots and per-algorithm audit files are still preserved under:
 
@@ -87,6 +89,8 @@ Current speed bins:
 - High: >1.60 m/s
 
 Acceleration magnitude is derived from the RTS velocity trajectory and smoothed with the same small median window used for motion diagnostics.
+
+Angular velocity is taken directly from the recorded SBG IMU body gyro and reported as the 3D gyro magnitude in rad/s. For older saved runs, the analyzer first checks run metadata and otherwise uses the single `.bin` file beside the RTS trajectory when that identification is unambiguous.
 
 ## Evaluator validation
 

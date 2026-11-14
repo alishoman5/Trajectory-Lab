@@ -226,6 +226,7 @@ class PipelineWorker(QObject):
                 "dataset_name": dataset_name,
                 "created_at": datetime.now().isoformat(),
                 "rts": str(Path(self.dataset["rts"]).resolve()),
+                "sbg": str(Path(self.dataset["sbg"]).resolve()),
                 "algorithms": [a.get("name", a.get("id", "")) for a in self.algorithms],
             }, indent=2), encoding="utf-8")
 
@@ -412,7 +413,8 @@ class PipelineWorker(QObject):
                         f"--metrics {shlex.quote(str(metrics_file))} "
                         f"--out-dir {shlex.quote(str(results_dir))} "
                         f"--dataset-name {shlex.quote(dataset_name)} "
-                        f"--output-root {shlex.quote(str(root_out))}"
+                        f"--output-root {shlex.quote(str(root_out))} "
+                        f"--sbg {shlex.quote(str(Path(self.dataset['sbg']).resolve()))}"
                     )
                     self._run(diagnostic_cmd, run_dir)
                     diagnostic_file = results_dir / "performance_analysis.json"
