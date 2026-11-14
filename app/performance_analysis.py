@@ -101,19 +101,30 @@ def ensure_reference_length(ref):
 
 
 def ensure_reference_speed(ref):
+    """Populate smoothed platform speed and acceleration magnitude from RTS data."""
+    t = ref["t"]
     vel = ref["vel"]
     if vel.shape == ref["pos"].shape and np.all(np.isfinite(vel)):
         speed = np.linalg.norm(vel, axis=1)
+        accel_vec = np.column_stack([np.gradient(vel[:, k], t) for k in range(3)])
+        acceleration = np.linalg.norm(accel_vec, axis=1)
     else:
-        t = ref["t"]
         p = ref["pos"]
-        speed = np.sqrt(sum(np.gradient(p[:, k], t) ** 2 for k in range(3)))
-    # Small median filter without pandas.
-    out = np.empty_like(speed)
+        vel_est = np.column_stack([np.gradient(p[:, k], t) for k in range(3)])
+        speed = np.linalg.norm(vel_est, axis=1)
+        accel_vec = np.column_stack([np.gradient(vel_est[:, k], t) for k in range(3)])
+        acceleration = np.linalg.norm(accel_vec, axis=1)
+
+    # Small median filter without pandas to suppress differentiation noise.
     radius = 2
+    speed_out = np.empty_like(speed)
+    accel_out = np.empty_like(acceleration)
     for i in range(len(speed)):
-        out[i] = np.median(speed[max(0, i-radius):min(len(speed), i+radius+1)])
-    ref["speed"] = out
+        lo, hi = max(0, i-radius), min(len(speed), i+radius+1)
+        speed_out[i] = np.median(speed[lo:hi])
+        accel_out[i] = np.median(acceleration[lo:hi])
+    ref["speed"] = speed_out
+    ref["acceleration"] = accel_out
 
 
 def interp_columns(query_t, source_t, values):
@@ -174,6 +185,7 @@ def analyze_algorithm(ref, est_path, alg):
 
     gp = interp_columns(et, ref["t"], ref["pos"])
     gs = np.interp(et, ref["t"], ref["speed"])
+    ga = np.interp(et, ref["t"], ref["acceleration"])
     gl = np.interp(et, ref["t"], ref["length"])
 
     aligned, R, trans = rigid_align(ep, gp)
@@ -264,13 +276,20 @@ def analyze_algorithm(ref, est_path, alg):
                 "mean_ate_m": float(np.mean(e)),
                 "max_ate_m": float(np.max(e)),
                 "mean_speed_m_s": float(np.mean(gs[bm])),
+                "mean_acceleration_m_s2": float(np.mean(ga[bm])),
             })
         worst.sort(key=lambda r: r["mean_ate_m"], reverse=True)
 
     if np.count_nonzero(moving_mask) >= 3:
-        corr = float(np.corrcoef(gs[moving_mask], error[moving_mask])[0, 1])
+        speed_corr = float(np.corrcoef(gs[moving_mask], error[moving_mask])[0, 1])
+        accel_corr = float(np.corrcoef(ga[moving_mask], error[moving_mask])[0, 1])
+        if not np.isfinite(speed_corr):
+            speed_corr = None
+        if not np.isfinite(accel_corr):
+            accel_corr = None
     else:
-        corr = None
+        speed_corr = None
+        accel_corr = None
 
     return {
         "id": alg["id"],
@@ -281,7 +300,8 @@ def analyze_algorithm(ref, est_path, alg):
         "moving_start_s": float(et[first] - et[0]),
         "moving_end_s": float(et[last] - et[0]),
         "moving_distance_m": float(max(0.0, gl[last] - gl[first])),
-        "speed_ate_correlation": corr,
+        "speed_ate_correlation": speed_corr,
+        "acceleration_ate_correlation": accel_corr,
         "moving_ate": stats(error[moving_mask]),
         "speed_bins": speed_bins,
         "rpe_5m_bins": rpe_bins,
@@ -293,6 +313,7 @@ def analyze_algorithm(ref, est_path, alg):
             "distance": distance_rel[moving_mask],
             "error": error[moving_mask],
             "speed": gs[moving_mask],
+            "acceleration": ga[moving_mask],
         },
     }
 
@@ -372,58 +393,62 @@ def make_findings(dataset_name, overall_metrics, analyses, best_by_speed, best_r
 
 
 def plot_results(out, analyses):
+    """Generate only plots that answer a diagnostic question.
+
+    Detailed Trajectopy audit plots remain under comparison/raw/.
+    """
     paths = {}
-    # 1. ATE vs travelled distance.
+
+    # 1. Where does the error occur?
     fig, ax = plt.subplots(figsize=(12, 6))
     for a in analyses:
         p = a["_plot"]
         if len(p["distance"]):
             ax.plot(p["distance"], p["error"], linewidth=1.5, label=a["name"])
     ax.set_xlabel("RTS travelled distance from movement start [m]")
-    ax.set_ylabel("Position error [m]")
-    ax.set_title("Algorithm error along the moving trajectory")
+    ax.set_ylabel("3D position error [m]")
+    ax.set_title("3D ATE along the moving trajectory")
     ax.grid(True); ax.legend(); fig.tight_layout()
-    path = out / "diagnostic_ate_vs_distance.png"; fig.savefig(path, dpi=200); plt.close(fig); paths["ate_distance"] = str(path)
+    path = out / "diagnostic_ate_vs_distance.png"
+    fig.savefig(path, dpi=200); plt.close(fig); paths["ate_distance"] = str(path)
 
-    # 2. Grouped ATE mean by speed.
-    fig, ax = plt.subplots(figsize=(12, 6))
-    x = np.arange(3); n = max(1, len(analyses)); width = min(0.24, 0.72/n)
-    offsets = (np.arange(n) - (n-1)/2) * width
-    for i, a in enumerate(analyses):
-        vals = [a["speed_bins"][k].get("mean") for k, *_ in SPEED_BINS]
-        ax.bar(x + offsets[i], [np.nan if v is None else v for v in vals], width=width, label=a["name"])
-    ax.set_xticks(x); ax.set_xticklabels([label for _, label, _, _ in SPEED_BINS])
-    ax.set_ylabel("Mean ATE [m]"); ax.set_title("Speed sensitivity: mean ATE by algorithm")
-    ax.grid(True, axis="y"); ax.legend(); fig.tight_layout()
-    path = out / "diagnostic_speed_ate.png"; fig.savefig(path, dpi=200); plt.close(fig); paths["speed_ate"] = str(path)
-
-    # 3. 5m RPE by speed.
-    fig, ax = plt.subplots(figsize=(12, 6))
-    for i, a in enumerate(analyses):
-        vals = [a["rpe_5m_bins"][k].get("mean_percent") for k, *_ in SPEED_BINS]
-        ax.bar(x + offsets[i], [np.nan if v is None else v for v in vals], width=width, label=a["name"])
-    ax.set_xticks(x); ax.set_xticklabels([label for _, label, _, _ in SPEED_BINS])
-    ax.set_ylabel("5 m relative position error [%]"); ax.set_title("Local drift by platform speed")
-    ax.grid(True, axis="y"); ax.legend(); fig.tight_layout()
-    path = out / "diagnostic_speed_rpe.png"; fig.savefig(path, dpi=200); plt.close(fig); paths["speed_rpe"] = str(path)
-
-    # 4. Speed vs ATE scatter.
+    # 2. Is error associated with platform speed?
     fig, ax = plt.subplots(figsize=(10, 7))
     for a in analyses:
         p = a["_plot"]
         if len(p["speed"]):
-            ax.scatter(p["speed"], p["error"], s=18, alpha=0.55, label=f"{a['name']} (r={a['speed_ate_correlation']:+.2f})" if a['speed_ate_correlation'] is not None else a['name'])
-    ax.axvline(LOW_MAX, linestyle="--", linewidth=1); ax.axvline(MEDIUM_MAX, linestyle="--", linewidth=1)
-    ax.set_xlabel("RTS platform speed [m/s]"); ax.set_ylabel("Position error [m]")
-    ax.set_title("ATE vs platform speed"); ax.grid(True); ax.legend(); fig.tight_layout()
-    path = out / "diagnostic_ate_vs_speed.png"; fig.savefig(path, dpi=200); plt.close(fig); paths["ate_speed"] = str(path)
+            corr = a.get("speed_ate_correlation")
+            label = a["name"] if corr is None else f"{a['name']} (r={corr:+.2f})"
+            ax.scatter(p["speed"], p["error"], s=18, alpha=0.55, label=label)
+    ax.axvline(LOW_MAX, linestyle="--", linewidth=1)
+    ax.axvline(MEDIUM_MAX, linestyle="--", linewidth=1)
+    ax.set_xlabel("RTS platform speed [m/s]"); ax.set_ylabel("3D position error [m]")
+    ax.set_title("ATE vs platform speed")
+    ax.grid(True); ax.legend(); fig.tight_layout()
+    path = out / "diagnostic_ate_vs_speed.png"
+    fig.savefig(path, dpi=200); plt.close(fig); paths["ate_speed"] = str(path)
 
-    # 5. Segment heatmap, common 5m bins.
-    max_seg = max([max([w["segment"] for w in a["worst_segments"]], default=0) for a in analyses] + [0])
-    # Reconstruct all segment means from plot arrays for a complete heatmap.
-    matrices = []
-    max_dist = max([float(np.max(a["_plot"]["distance"])) if len(a["_plot"]["distance"]) else 0.0 for a in analyses] + [0.0])
+    # 3. Is error associated with acceleration magnitude?
+    fig, ax = plt.subplots(figsize=(10, 7))
+    for a in analyses:
+        p = a["_plot"]
+        if len(p["acceleration"]):
+            corr = a.get("acceleration_ate_correlation")
+            label = a["name"] if corr is None else f"{a['name']} (r={corr:+.2f})"
+            ax.scatter(p["acceleration"], p["error"], s=18, alpha=0.55, label=label)
+    ax.set_xlabel("RTS acceleration magnitude [m/s²]"); ax.set_ylabel("3D position error [m]")
+    ax.set_title("ATE vs platform acceleration")
+    ax.grid(True); ax.legend(); fig.tight_layout()
+    path = out / "diagnostic_ate_vs_acceleration.png"
+    fig.savefig(path, dpi=200); plt.close(fig); paths["ate_acceleration"] = str(path)
+
+    # 4. Which spatial sections are consistently weak?
+    max_dist = max([
+        float(np.max(a["_plot"]["distance"])) if len(a["_plot"]["distance"]) else 0.0
+        for a in analyses
+    ] + [0.0])
     nbins = max(1, int(math.ceil(max_dist / SEGMENT_LENGTH_M)))
+    matrices = []
     for a in analyses:
         d, e = a["_plot"]["distance"], a["_plot"]["error"]
         row = []
@@ -435,32 +460,53 @@ def plot_results(out, analyses):
     fig, ax = plt.subplots(figsize=(max(10, nbins*0.7), max(4, len(analyses)*1.0)))
     im = ax.imshow(mat, aspect="auto", interpolation="nearest")
     ax.set_yticks(np.arange(len(analyses))); ax.set_yticklabels([a["name"] for a in analyses])
-    ax.set_xticks(np.arange(nbins)); ax.set_xticklabels([f"{b*5}–{(b+1)*5}" for b in range(nbins)], rotation=45, ha="right")
+    ax.set_xticks(np.arange(nbins))
+    ax.set_xticklabels([f"{b*5}–{(b+1)*5}" for b in range(nbins)], rotation=45, ha="right")
     ax.set_xlabel("RTS distance segment [m]"); ax.set_title("Mean ATE by 5 m segment")
     cb = fig.colorbar(im, ax=ax); cb.set_label("Mean ATE [m]")
-    fig.tight_layout(); path = out / "diagnostic_segment_heatmap.png"; fig.savefig(path, dpi=200); plt.close(fig); paths["segment_heatmap"] = str(path)
+    fig.tight_layout()
+    path = out / "diagnostic_segment_heatmap.png"
+    fig.savefig(path, dpi=200); plt.close(fig); paths["segment_heatmap"] = str(path)
     return paths
 
-
 def write_csvs(out, analyses):
-    speed_csv = out / "diagnostic_speed_summary.csv"
-    with speed_csv.open("w", newline="", encoding="utf-8") as f:
+    """Keep detailed tables for audit without cluttering the main comparison folder."""
+    raw = out / "raw"
+    raw.mkdir(parents=True, exist_ok=True)
+
+    motion_csv = raw / "diagnostic_motion_summary.csv"
+    with motion_csv.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["Algorithm", "Speed bin", "Poses", "Mean speed [m/s]", "Mean ATE [m]", "ATE RMSE [m]", "Median ATE [m]", "Max ATE [m]", "Speed/ATE correlation"])
+        w.writerow([
+            "Algorithm", "Speed bin", "Poses", "Mean speed [m/s]",
+            "Mean ATE [m]", "ATE RMSE [m]", "Median ATE [m]", "Max ATE [m]",
+            "Speed/ATE correlation", "Acceleration/ATE correlation"
+        ])
         for a in analyses:
             for key, label, _, _ in SPEED_BINS:
                 b = a["speed_bins"][key]
-                w.writerow([a["name"], label, b["count"], b["mean_speed_m_s"], b["mean"], b["rmse"], b["median"], b["max"], a["speed_ate_correlation"]])
+                w.writerow([
+                    a["name"], label, b["count"], b["mean_speed_m_s"],
+                    b["mean"], b["rmse"], b["median"], b["max"],
+                    a["speed_ate_correlation"], a["acceleration_ate_correlation"]
+                ])
 
-    seg_csv = out / "diagnostic_worst_segments.csv"
+    seg_csv = raw / "diagnostic_worst_segments.csv"
     with seg_csv.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["Algorithm", "Rank", "Distance start [m]", "Distance end [m]", "Poses", "Mean ATE [m]", "Max ATE [m]", "Mean speed [m/s]"])
+        w.writerow([
+            "Algorithm", "Rank", "Distance start [m]", "Distance end [m]", "Poses",
+            "Mean ATE [m]", "Max ATE [m]", "Mean speed [m/s]",
+            "Mean acceleration [m/s²]"
+        ])
         for a in analyses:
             for rank, s in enumerate(a["worst_segments"], 1):
-                w.writerow([a["name"], rank, s["distance_start_m"], s["distance_end_m"], s["poses"], s["mean_ate_m"], s["max_ate_m"], s["mean_speed_m_s"]])
-    return str(speed_csv), str(seg_csv)
-
+                w.writerow([
+                    a["name"], rank, s["distance_start_m"], s["distance_end_m"], s["poses"],
+                    s["mean_ate_m"], s["max_ate_m"], s["mean_speed_m_s"],
+                    s.get("mean_acceleration_m_s2")
+                ])
+    return str(motion_csv), str(seg_csv)
 
 def infer_dataset_name(run_dir):
     meta = run_dir / "run_metadata.json"
@@ -567,7 +613,7 @@ def main():
         "findings": findings,
         "algorithms": serial_analyses,
         "plots": plots,
-        "speed_csv": speed_csv,
+        "motion_csv": speed_csv,
         "segments_csv": segments_csv,
     }
     perf_file = out / "performance_analysis.json"

@@ -1,4 +1,4 @@
-# Trajectory Lab GUI — Trajectopy ATE + RPE
+# Trajectory Lab GUI — focused trajectory evaluation
 
 ROS1 Noetic toolbox for running multiple LiDAR/LiDAR-inertial trajectory estimators on the same synchronized dataset and evaluating them against RTS with **Trajectopy**.
 
@@ -7,38 +7,109 @@ ROS1 Noetic toolbox for running multiple LiDAR/LiDAR-inertial trajectory estimat
 - **LIO-SAM** — configured
 - **FAST-LIO2** — configured
 - **HDL Graph SLAM (NDT_OMP + LM + Loops)** — configured
-  - NDT_OMP scan matching
-  - NDT_OMP loop verification
-  - loop closures enabled
-  - Levenberg-Marquardt + CHOLMOD (`lm_var_cholmod`) graph optimization
-  - final optimized graph poses are evaluated, not raw `/odom`
-- **KISS-ICP** — placeholder profile until its ROS wrapper is configured
+- **KISS-ICP** — placeholder until its ROS wrapper is configured
 
-## Evaluation
+## Evaluation policy
 
-The comparison stage delegates temporal matching, rigid 6-DoF alignment, ATE and RPE to Trajectopy. Scale and time-shift estimation are disabled because sensor synchronization is handled upstream.
+The comparison stage delegates temporal matching, rigid 6-DoF alignment, ATE and distance-based RPE to Trajectopy.
 
-The GUI displays the complete Trajectopy ATE and RPE property dictionaries, RPE statistics by distance, and alignment output. Native result CSVs, aligned trajectories, alignment files, JSON/TXT summaries and official Trajectopy plots are written to each run folder.
+- nearest temporal matching
+- rigid translation + rotation alignment
+- no scale estimation
+- no time-shift estimation
+- no lever-arm estimation
+- RPE defaults: 5–50 m in 5 m steps
 
-See `TRAJECTOPY_EVALUATION.md` for the exact policy and output list.
+The validated project environment uses **Trajectopy 4.3.3**. The setup script pins this version because newer Trajectopy releases changed the plotting API.
 
-## RPE defaults for the campus-scale datasets
+## Focused Results UI
 
-- min pair distance: 5 m
-- max pair distance: 50 m
-- step: 5 m
-- all overlapping pose pairs: enabled
+The GUI intentionally shows only outputs that answer a concrete evaluation question.
 
-Distance-domain position RPE is reported by Trajectopy in `%`; rotation RPE is `deg/100m` when reference orientation exists.
+### Overview
+Answers: **Is the trajectory accurate overall?**
 
-## Sensor workflow
+Shows:
+- ATE mean
+- ATE RMS
+- ATE max
+- position RPE
+- matched poses
+- algorithm ranking by ATE mean
 
-The supplied converters target the current rig:
+### Motion Diagnostics
+Answers: **Under which motion conditions does the error increase?**
 
-- Ouster OS1-128
-- SBG Ellipse-D raw ECom `.bin`
-- PPS/NMEA-synchronized Ouster timestamps
-- RTS `.traj` ground truth
+Shows:
+- moving-only ATE
+- speed ↔ ATE correlation
+- acceleration ↔ ATE correlation
+- low / medium / high-speed ATE
+
+The correlations are diagnostic associations, not proof of causation.
+
+### Failure Segments
+Answers: **Where are the weakest sections?**
+
+Shows the worst 5 m sections with:
+- mean and maximum ATE
+- mean speed
+- mean acceleration
+- number of poses
+
+## Focused plots
+
+The GUI shows six plots:
+
+1. Trajectory vs RTS
+2. ATE Along Route
+3. RPE vs Distance
+4. ATE vs Speed
+5. ATE vs Acceleration
+6. Failure Heatmap
+
+Detailed Trajectopy properties, aligned trajectories, covariance/correlation plots and per-algorithm audit files are still preserved under:
+
+```text
+comparison/raw/
+```
+
+They are available for verification without cluttering the main results view.
+
+## Speed analysis
+
+Stationary start/end periods are removed using a 0.30 m/s threshold.
+
+Current speed bins:
+
+- Low: 0.30–1.20 m/s
+- Medium: 1.20–1.60 m/s
+- High: >1.60 m/s
+
+Acceleration magnitude is derived from the RTS velocity trajectory and smoothed with the same small median window used for motion diagnostics.
+
+## Evaluator validation
+
+A deterministic self-test is included:
+
+```bash
+~/.venvs/trajectory_lab_trajectopy/bin/python validate_evaluator.py
+```
+
+The GUI also exposes **Run evaluator self-test** on the Results page.
+
+The test verifies:
+
+- algorithm profile schema
+- correct non-negative 3D ATE magnitude
+- rigid SE(3) alignment invariance
+- independent ATE calculation against Trajectopy
+- no-scale policy using a known 2% scale error
+- identical metrics for the same trajectory under every algorithm profile
+- speed/acceleration/failure diagnostic generation
+- consistency between native metrics and GUI summary aliases
+
+GitHub Actions additionally runs static checks and a headless GUI smoke test.
 
 ## Install GUI dependency
 
@@ -53,7 +124,7 @@ If Qt reports an `xcb-cursor0` problem:
 sudo apt install libxcb-cursor0
 ```
 
-## Install/verify Trajectopy once
+## Install/verify Trajectopy
 
 ```bash
 chmod +x setup_trajectopy.sh
@@ -73,43 +144,13 @@ source ~/catkin_ws/devel/setup.bash
 
 ## Recommended workflow
 
-1. Dataset → select or auto-detect PCAP, JSON, SBG BIN and RTS `.traj`.
-2. Validate dataset.
-3. Algorithms → select configured algorithms.
-4. Run & Compare → choose temporal matching and RPE distance settings.
-5. Run selected algorithms.
-6. Results → inspect Overview, All ATE outputs, All RPE outputs, Alignment outputs and RPE by distance.
-7. Open run folder for native Trajectopy CSV/JSON/TXT/plots and algorithm logs.
+1. Select or auto-detect PCAP, JSON, SBG BIN and RTS `.traj`.
+2. Validate the dataset.
+3. Select the configured algorithms.
+4. Run them against the same synchronized sensor bag.
+5. Inspect Overview first.
+6. Locate weak regions with ATE Along Route and Failure Heatmap.
+7. Compare error against speed and acceleration.
+8. Use raw audit files only when a result needs deeper verification.
 
-## Results UI (clarified version)
-
-The Results screen now separates the evaluation into a compact overview, ATE details,
-RPE details, alignment parameters and RPE-by-distance tables. Plot previews use concise
-algorithm names and high-resolution figures. The XY view is shown in a local coordinate
-frame relative to the first RTS point so large UTM offsets do not compress the plot.
-Native Trajectopy plots and CSV/JSON outputs are still preserved in the run folder.
-
-## Performance Insights update
-
-This build adds presentation-oriented analysis after the normal Trajectopy comparison.
-
-New Results tabs:
-- **Performance Insights**: moving-only ATE, speed-vs-ATE correlation, and Low/Medium/High speed ATE for every algorithm.
-- **Failure Segments**: the five worst 5 m trajectory sections per algorithm.
-- **Dataset History**: latest saved result per dataset and the best overall / low-speed / medium-speed / high-speed algorithm.
-
-New plots:
-- Errors by Distance
-- Speed Sensitivity
-- 5 m Drift by Speed
-- ATE vs Speed
-- Failure Heatmap
-
-Speed analysis automatically removes stationary start/end periods using a 0.30 m/s threshold. Bins are:
-- Low: 0.30–1.20 m/s
-- Medium: 1.20–1.60 m/s
-- High: >1.60 m/s
-
-The Results page also has **Load / Analyze saved run**. Select an old Trajectory Lab run folder and the GUI will generate the new diagnostics from its existing `.traj` results without replaying ROS bags or rerunning the algorithms.
-
-The original Trajectopy ATE/RPE tables and plots remain unchanged. Diagnostic speed/segment analysis is an additional interpretation layer and is exported to `comparison/performance_analysis.json` plus CSV/PNG files.
+**Load / Analyze saved run** can generate the focused diagnostics from an existing completed run without replaying ROS bags.
