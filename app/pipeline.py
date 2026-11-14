@@ -398,9 +398,9 @@ class PipelineWorker(QObject):
             metrics_file = results_dir / "summary_metrics.json"
             metrics = json.loads(metrics_file.read_text())
 
-            # Presentation-oriented post analysis: moving-only speed sensitivity,
-            # worst trajectory sections and cross-dataset leaderboard.  This uses
-            # only the already-created .traj files, so no extra ROS replay is needed.
+            # Focused post analysis: failure location plus motion associations
+            # (speed and acceleration). This uses only the already-created .traj
+            # files, so no extra ROS replay is needed.
             self.progress.emit(94, "Analyzing algorithm strengths and failure regions")
             diagnostics = {}
             diagnostic_script = self.project_dir / "performance_analysis.py"
@@ -430,17 +430,9 @@ class PipelineWorker(QObject):
                 "results_dir": str(results_dir),
                 "diagnostics": diagnostics,
                 "plots": {
-                    # Clean GUI previews generated from Trajectopy result objects.
+                    # Only the core plots shown by the focused GUI.
                     "xy": str(results_dir / "combined_xy.png"),
-                    "z": str(results_dir / "combined_z.png"),
-                    "ate": str(results_dir / "gui_ate_vs_time.png"),
                     "rpe": str(results_dir / "gui_rpe_vs_distance.png"),
-                    # Native Trajectopy plots remain available in the run folder.
-                    "rpe_time": str(results_dir / "trajectopy_rpe_time.png"),
-                    "ate_edf": str(results_dir / "trajectopy_ate_edf.png"),
-                    "ate_bars_position": str(results_dir / "trajectopy_ate_bars_position.png"),
-                    "ate_3d": str(results_dir / "trajectopy_ate_3d.png"),
-                    "error": str(results_dir / "combined_error.png"),
                 },
             })
 
