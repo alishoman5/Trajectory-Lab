@@ -1,0 +1,80 @@
+name: Validate Trajectory Lab GUI
+
+on:
+  push:
+    branches: [main, gui-focused-diagnostics-validation]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-22.04
+    env:
+      QT_QPA_PLATFORM: offscreen
+      MPLBACKEND: Agg
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install validation dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install numpy matplotlib PyQt5 trajectopy
+
+      - name: Static checks
+        run: |
+          python -m py_compile app/*.py
+          python -m json.tool app/algorithms.json >/dev/null
+          bash -n app/run_gui.sh
+          bash -n app/setup_trajectopy.sh
+          bash -n scripts/install_profiles.sh
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+          for p in Path(".").rglob("*.launch"):
+              ET.parse(p)
+              print("XML OK:", p)
+          PY
+
+      - name: Numerical evaluator self-test
+        run: |
+          python app/validate_evaluator.py --report validation_report.json
+
+      - name: Headless GUI smoke test
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "app")
+          from PyQt5.QtWidgets import QApplication
+          import trajectory_lab
+
+          app = QApplication([])
+          window = trajectory_lab.MainWindow()
+
+          assert window.results_tabs.count() == 3, window.results_tabs.count()
+          assert window.plot_tabs.count() == 6, window.plot_tabs.count()
+          assert window.results_table.columnCount() == 7
+          assert window.insights_table.columnCount() == 8
+          assert window.failure_table.columnCount() == 9
+
+          result_tabs = [window.results_tabs.tabText(i) for i in range(window.results_tabs.count())]
+          plot_tabs = [window.plot_tabs.tabText(i) for i in range(window.plot_tabs.count())]
+          print("Result tabs:", result_tabs)
+          print("Plot tabs:", plot_tabs)
+          print("Configured algorithms:", [a["id"] for a in window.algorithms])
+          print("GUI smoke test: PASS")
+          window.close()
+          app.quit()
+          PY
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trajectory-lab-validation
+          path: validation_report.json
+          if-no-files-found: ignore
