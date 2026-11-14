@@ -545,9 +545,9 @@ class MainWindow(QMainWindow):
             "padding:12px;color:#d7e3f5;"
         )
         diagnostics_l.addWidget(self.findings_label)
-        self.insights_table = QTableWidget(0, 8)
+        self.insights_table = QTableWidget(0, 9)
         self.insights_table.setHorizontalHeaderLabels([
-            "Algorithm", "Moving ATE [m]", "Speed↔ATE r", "Accel↔ATE r",
+            "Algorithm", "Moving ATE [m]", "Speed↔ATE r", "Accel↔ATE r", "Angular↔ATE r",
             "Low-speed ATE [m]", "Medium-speed ATE [m]", "High-speed ATE [m]", "Moving Poses"
         ])
         self.prepare_table(self.insights_table, algorithm_column=0)
@@ -558,15 +558,16 @@ class MainWindow(QMainWindow):
         failure_page = QWidget()
         failure_l = QVBoxLayout(failure_page)
         failure_note = QLabel(
-            "Worst 5 m sections. Compare their error, speed and acceleration with good sections before forming a failure hypothesis."
+            "Worst 5 m sections. Compare error with speed, acceleration and measured SBG angular velocity before forming a failure hypothesis."
         )
         failure_note.setObjectName("subtitle")
         failure_note.setWordWrap(True)
         failure_l.addWidget(failure_note)
-        self.failure_table = QTableWidget(0, 9)
+        self.failure_table = QTableWidget(0, 10)
         self.failure_table.setHorizontalHeaderLabels([
             "Algorithm", "Rank", "Start [m]", "End [m]", "Mean ATE [m]",
-            "Max ATE [m]", "Mean Speed [m/s]", "Mean Accel [m/s²]", "Poses"
+            "Max ATE [m]", "Mean Speed [m/s]", "Mean Accel [m/s²]",
+            "Mean Angular [rad/s]", "Poses"
         ])
         self.prepare_table(self.failure_table, algorithm_column=0)
         failure_l.addWidget(self.failure_table)
@@ -582,6 +583,7 @@ class MainWindow(QMainWindow):
         self.plot_diag_distance = self.image_label()
         self.plot_diag_scatter = self.image_label()
         self.plot_diag_acceleration = self.image_label()
+        self.plot_diag_angular = self.image_label()
         self.plot_diag_heatmap = self.image_label()
 
         self.plot_tabs.addTab(self.wrap_image(self.plot_xy), "Trajectory vs RTS")
@@ -589,6 +591,7 @@ class MainWindow(QMainWindow):
         self.plot_tabs.addTab(self.wrap_image(self.plot_rpe), "RPE vs Distance")
         self.plot_tabs.addTab(self.wrap_image(self.plot_diag_scatter), "ATE vs Speed")
         self.plot_tabs.addTab(self.wrap_image(self.plot_diag_acceleration), "ATE vs Acceleration")
+        self.plot_tabs.addTab(self.wrap_image(self.plot_diag_angular), "ATE vs Angular Velocity")
         self.plot_tabs.addTab(self.wrap_image(self.plot_diag_heatmap), "Failure Heatmap")
         l.addWidget(self.plot_tabs, 1)
 
@@ -891,6 +894,7 @@ class MainWindow(QMainWindow):
         self.load_plot(self.plot_diag_distance, diag_plots.get("ate_distance", ""))
         self.load_plot(self.plot_diag_scatter, diag_plots.get("ate_speed", ""))
         self.load_plot(self.plot_diag_acceleration, diag_plots.get("ate_acceleration", ""))
+        self.load_plot(self.plot_diag_angular, diag_plots.get("ate_angular_velocity", ""))
         self.load_plot(self.plot_diag_heatmap, diag_plots.get("segment_heatmap", ""))
 
         self.open_output_btn.setEnabled(True)
@@ -945,11 +949,13 @@ class MainWindow(QMainWindow):
             moving_mean = (a.get("moving_ate", {}) or {}).get("mean")
             speed_corr = a.get("speed_ate_correlation")
             accel_corr = a.get("acceleration_ate_correlation")
+            angular_corr = a.get("angular_velocity_ate_correlation")
             vals = [
                 a.get("name", ""),
                 "N/A" if moving_mean is None else f"{float(moving_mean):.4f}",
                 "N/A" if speed_corr is None else f"{float(speed_corr):+.3f}",
                 "N/A" if accel_corr is None else f"{float(accel_corr):+.3f}",
+                "N/A" if angular_corr is None else f"{float(angular_corr):+.3f}",
                 "N/A" if low is None else f"{low:.4f}",
                 "N/A" if medium is None else f"{medium:.4f}",
                 "N/A" if high is None else f"{high:.4f}",
@@ -975,6 +981,7 @@ class MainWindow(QMainWindow):
                 f"{float(seg.get('max_ate_m', 0.0)):.4f}",
                 f"{float(seg.get('mean_speed_m_s', 0.0)):.3f}",
                 "N/A" if seg.get("mean_acceleration_m_s2") is None else f"{float(seg.get('mean_acceleration_m_s2')):.3f}",
+                "N/A" if seg.get("mean_angular_velocity_rad_s") is None else f"{float(seg.get('mean_angular_velocity_rad_s')):.3f}",
                 str(seg.get("poses", 0)),
             ]
             for col, v in enumerate(vals):
@@ -1097,28 +1104,37 @@ class MainWindow(QMainWindow):
         try:
             metrics = json.loads(metrics_file.read_text())
             perf_file = results_dir / "performance_analysis.json"
-            if not perf_file.exists():
-                meta = run_dir / "run_metadata.json"
-                if meta.exists():
-                    try:
-                        dataset_name = json.loads(meta.read_text()).get("dataset_name") or run_dir.name
-                    except Exception:
-                        dataset_name = run_dir.name
-                else:
-                    dataset_name = re.sub(r"_\d{8}_\d{6}$", "", run_dir.name)
-                script = APP_DIR / "performance_analysis.py"
-                cmd = [
-                    sys.executable, str(script),
-                    "--manifest", str(manifest),
-                    "--metrics", str(metrics_file),
-                    "--out-dir", str(results_dir),
-                    "--dataset-name", dataset_name,
-                    "--output-root", str(run_dir.parent),
-                ]
-                proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
-                self.append_log(proc.stdout)
-                if proc.returncode != 0:
-                    raise RuntimeError(proc.stdout[-3000:])
+
+            # Re-run the lightweight diagnostics every time a saved run is loaded.
+            # This lets older runs gain newly added diagnostics without replaying ROS.
+            meta = run_dir / "run_metadata.json"
+            meta_data = {}
+            if meta.exists():
+                try:
+                    meta_data = json.loads(meta.read_text())
+                    dataset_name = meta_data.get("dataset_name") or run_dir.name
+                except Exception:
+                    dataset_name = run_dir.name
+            else:
+                dataset_name = re.sub(r"_\d{8}_\d{6}$", "", run_dir.name)
+
+            script = APP_DIR / "performance_analysis.py"
+            cmd = [
+                sys.executable, str(script),
+                "--manifest", str(manifest),
+                "--metrics", str(metrics_file),
+                "--out-dir", str(results_dir),
+                "--dataset-name", dataset_name,
+                "--output-root", str(run_dir.parent),
+            ]
+            sbg_path = meta_data.get("sbg")
+            if sbg_path and Path(sbg_path).is_file():
+                cmd.extend(["--sbg", sbg_path])
+
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            self.append_log(proc.stdout)
+            if proc.returncode != 0:
+                raise RuntimeError(proc.stdout[-3000:])
             diagnostics = json.loads(perf_file.read_text()) if perf_file.exists() else {}
             result = {
                 "run_dir": str(run_dir),
