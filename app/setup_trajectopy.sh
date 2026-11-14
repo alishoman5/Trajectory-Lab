@@ -4,6 +4,7 @@ set -euo pipefail
 # Trajectopy main currently requires Python >= 3.10. ROS Noetic on Ubuntu 20.04
 # normally uses Python 3.8, so keep Trajectopy isolated from ROS in its own venv.
 VENV="${TRAJECTOPY_VENV:-$HOME/.venvs/trajectory_lab_trajectopy}"
+TRAJECTOPY_VERSION="${TRAJECTOPY_VERSION:-4.3.3}"
 PY=""
 
 version_ge_310() {
@@ -22,9 +23,10 @@ done
 
 if [[ -n "$PY" ]]; then
   echo "Using $($PY --version) at $PY"
+  echo "Installing Trajectopy $TRAJECTOPY_VERSION (validated project version)"
   "$PY" -m venv "$VENV"
   "$VENV/bin/python" -m pip install --upgrade pip
-  "$VENV/bin/python" -m pip install --upgrade trajectopy
+  "$VENV/bin/python" -m pip install "trajectopy==$TRAJECTOPY_VERSION"
 else
   echo "No system Python >= 3.10 found. Installing an isolated Python 3.11 with uv..."
   if ! command -v uv >/dev/null 2>&1; then
@@ -47,7 +49,7 @@ else
   uv python install 3.11
   rm -rf "$VENV"
   uv venv --python 3.11 "$VENV"
-  uv pip install --python "$VENV/bin/python" --upgrade trajectopy
+  uv pip install --python "$VENV/bin/python" "trajectopy==$TRAJECTOPY_VERSION"
 fi
 
 echo
