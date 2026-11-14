@@ -15,10 +15,12 @@ RTS positions interpolated at the estimate timestamps.
 """
 
 import argparse
+import calendar
 import csv
 import json
 import math
 import re
+import struct
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -37,6 +39,111 @@ SPEED_BINS = [
     ("medium", "Medium (1.2–1.6 m/s)", LOW_MAX, MEDIUM_MAX),
     ("high", "High (>1.6 m/s)", MEDIUM_MAX, float("inf")),
 ]
+
+
+SBG_SYNC1 = 0xFF
+SBG_SYNC2 = 0x5A
+SBG_ETX = 0x33
+
+
+def load_sbg_gyro(path):
+    """Read SBG ECom UTC + IMU frames without requiring ROS.
+
+    Returns Unix timestamps and body angular-speed magnitude in rad/s. The
+    project converter writes the same gyro values directly to ROS Imu
+    angular_velocity, so this diagnostic uses the recorded IMU measurement
+    rather than an angular-rate estimate derived from the trajectory shape.
+    """
+    path = Path(path).expanduser().resolve()
+    data = path.read_bytes()
+    utc = []
+    imu = []
+
+    i = 0
+    n = len(data)
+    while i + 9 <= n:
+        if data[i] != SBG_SYNC1 or data[i + 1] != SBG_SYNC2:
+            i += 1
+            continue
+
+        msg_id = data[i + 2]
+        msg_class = data[i + 3]
+        length = struct.unpack_from("<H", data, i + 4)[0]
+        frame_size = 6 + length + 2 + 1
+        if i + frame_size > n:
+            break
+        if data[i + frame_size - 1] != SBG_ETX:
+            i += 1
+            continue
+
+        payload = data[i + 6:i + 6 + length]
+        if msg_class == 0 and msg_id == 2 and len(payload) == 21:
+            sensor_us = struct.unpack_from("<I", payload, 0)[0]
+            year = struct.unpack_from("<H", payload, 6)[0]
+            month, day, hour, minute, second = struct.unpack_from("<5B", payload, 8)
+            nanosecond = struct.unpack_from("<I", payload, 13)[0]
+            if 2000 <= year <= 2100:
+                try:
+                    epoch_sec = calendar.timegm((year, month, day, hour, minute, second))
+                    epoch_ns = epoch_sec * 1_000_000_000 + int(nanosecond)
+                    utc.append((sensor_us, epoch_ns))
+                except (ValueError, OverflowError):
+                    pass
+        elif msg_class == 0 and msg_id == 3 and len(payload) == 58:
+            sensor_us = struct.unpack_from("<I", payload, 0)[0]
+            gyro = np.asarray(struct.unpack_from("<3f", payload, 18), dtype=float)
+            imu.append((sensor_us, float(np.linalg.norm(gyro))))
+
+        i += frame_size
+
+    if not utc or len(imu) < 3:
+        raise RuntimeError(f"SBG file does not contain enough UTC/IMU data: {path}")
+
+    offsets = np.asarray(
+        [epoch_ns - int(sensor_us) * 1000 for sensor_us, epoch_ns in utc],
+        dtype=np.int64,
+    )
+    clock_offset_ns = int(np.median(offsets))
+
+    imu.sort(key=lambda x: x[0])
+    t = np.asarray(
+        [(int(sensor_us) * 1000 + clock_offset_ns) / 1e9 for sensor_us, _ in imu],
+        dtype=float,
+    )
+    omega = np.asarray([value for _, value in imu], dtype=float)
+
+    # Small median filter to suppress isolated gyro spikes while preserving
+    # actual turning periods.
+    filtered = np.empty_like(omega)
+    radius = 2
+    for k in range(len(omega)):
+        lo, hi = max(0, k-radius), min(len(omega), k+radius+1)
+        filtered[k] = np.median(omega[lo:hi])
+
+    unique_t, idx = np.unique(t, return_index=True)
+    return {
+        "t": unique_t,
+        "angular_velocity": filtered[idx],
+        "source": str(path),
+        "samples": int(len(unique_t)),
+    }
+
+
+def resolve_sbg_path(requested, manifest):
+    """Resolve explicit SBG path or infer the single .bin beside the RTS file."""
+    if requested:
+        p = Path(requested).expanduser()
+        if p.is_file():
+            return p.resolve()
+
+    try:
+        rts_parent = Path(manifest["rts"]).expanduser().resolve().parent
+        candidates = sorted(rts_parent.glob("*.bin"))
+        if len(candidates) == 1:
+            return candidates[0]
+    except Exception:
+        pass
+    return None
 
 
 def json_safe(x):
@@ -175,7 +282,7 @@ def classify_speed(v):
     return "high"
 
 
-def analyze_algorithm(ref, est_path, alg):
+def analyze_algorithm(ref, est_path, alg, angular=None):
     est = read_traj(est_path)
     mask = (est["t"] >= ref["t"][0]) & (est["t"] <= ref["t"][-1])
     et = est["t"][mask]
@@ -187,6 +294,16 @@ def analyze_algorithm(ref, est_path, alg):
     gs = np.interp(et, ref["t"], ref["speed"])
     ga = np.interp(et, ref["t"], ref["acceleration"])
     gl = np.interp(et, ref["t"], ref["length"])
+    if angular is not None and len(angular.get("t", [])) >= 2:
+        gw = np.interp(
+            et,
+            angular["t"],
+            angular["angular_velocity"],
+            left=np.nan,
+            right=np.nan,
+        )
+    else:
+        gw = np.full(len(et), np.nan, dtype=float)
 
     aligned, R, trans = rigid_align(ep, gp)
     error = np.linalg.norm(aligned - gp, axis=1)
@@ -277,19 +394,31 @@ def analyze_algorithm(ref, est_path, alg):
                 "max_ate_m": float(np.max(e)),
                 "mean_speed_m_s": float(np.mean(gs[bm])),
                 "mean_acceleration_m_s2": float(np.mean(ga[bm])),
+                "mean_angular_velocity_rad_s": (
+                    float(np.mean(gw[bm & np.isfinite(gw)]))
+                    if np.any(bm & np.isfinite(gw)) else None
+                ),
             })
         worst.sort(key=lambda r: r["mean_ate_m"], reverse=True)
 
     if np.count_nonzero(moving_mask) >= 3:
         speed_corr = float(np.corrcoef(gs[moving_mask], error[moving_mask])[0, 1])
         accel_corr = float(np.corrcoef(ga[moving_mask], error[moving_mask])[0, 1])
+        angular_mask = moving_mask & np.isfinite(gw)
+        angular_corr = (
+            float(np.corrcoef(gw[angular_mask], error[angular_mask])[0, 1])
+            if np.count_nonzero(angular_mask) >= 3 else None
+        )
         if not np.isfinite(speed_corr):
             speed_corr = None
         if not np.isfinite(accel_corr):
             accel_corr = None
+        if angular_corr is not None and not np.isfinite(angular_corr):
+            angular_corr = None
     else:
         speed_corr = None
         accel_corr = None
+        angular_corr = None
 
     return {
         "id": alg["id"],
@@ -302,6 +431,8 @@ def analyze_algorithm(ref, est_path, alg):
         "moving_distance_m": float(max(0.0, gl[last] - gl[first])),
         "speed_ate_correlation": speed_corr,
         "acceleration_ate_correlation": accel_corr,
+        "angular_velocity_ate_correlation": angular_corr,
+        "angular_velocity_samples": int(np.count_nonzero(moving_mask & np.isfinite(gw))),
         "moving_ate": stats(error[moving_mask]),
         "speed_bins": speed_bins,
         "rpe_5m_bins": rpe_bins,
@@ -314,6 +445,7 @@ def analyze_algorithm(ref, est_path, alg):
             "error": error[moving_mask],
             "speed": gs[moving_mask],
             "acceleration": ga[moving_mask],
+            "angular_velocity": gw[moving_mask],
         },
     }
 
@@ -442,7 +574,30 @@ def plot_results(out, analyses):
     path = out / "diagnostic_ate_vs_acceleration.png"
     fig.savefig(path, dpi=200); plt.close(fig); paths["ate_acceleration"] = str(path)
 
-    # 4. Which spatial sections are consistently weak?
+    # 4. Is error associated with measured IMU angular velocity?
+    angular_available = any(
+        np.any(np.isfinite(a["_plot"].get("angular_velocity", np.array([]))))
+        for a in analyses
+    )
+    if angular_available:
+        fig, ax = plt.subplots(figsize=(10, 7))
+        for a in analyses:
+            p = a["_plot"]
+            omega = p.get("angular_velocity", np.array([]))
+            valid = np.isfinite(omega)
+            if np.any(valid):
+                corr = a.get("angular_velocity_ate_correlation")
+                label = a["name"] if corr is None else f"{a['name']} (r={corr:+.2f})"
+                ax.scatter(omega[valid], p["error"][valid], s=18, alpha=0.55, label=label)
+        ax.set_xlabel("SBG angular velocity magnitude [rad/s]")
+        ax.set_ylabel("3D position error [m]")
+        ax.set_title("ATE vs angular velocity")
+        ax.grid(True); ax.legend(); fig.tight_layout()
+        path = out / "diagnostic_ate_vs_angular_velocity.png"
+        fig.savefig(path, dpi=200); plt.close(fig)
+        paths["ate_angular_velocity"] = str(path)
+
+    # 5. Which spatial sections are consistently weak?
     max_dist = max([
         float(np.max(a["_plot"]["distance"])) if len(a["_plot"]["distance"]) else 0.0
         for a in analyses
@@ -480,7 +635,7 @@ def write_csvs(out, analyses):
         w.writerow([
             "Algorithm", "Speed bin", "Poses", "Mean speed [m/s]",
             "Mean ATE [m]", "ATE RMSE [m]", "Median ATE [m]", "Max ATE [m]",
-            "Speed/ATE correlation", "Acceleration/ATE correlation"
+            "Speed/ATE correlation", "Acceleration/ATE correlation", "Angular velocity/ATE correlation"
         ])
         for a in analyses:
             for key, label, _, _ in SPEED_BINS:
@@ -488,7 +643,8 @@ def write_csvs(out, analyses):
                 w.writerow([
                     a["name"], label, b["count"], b["mean_speed_m_s"],
                     b["mean"], b["rmse"], b["median"], b["max"],
-                    a["speed_ate_correlation"], a["acceleration_ate_correlation"]
+                    a["speed_ate_correlation"], a["acceleration_ate_correlation"],
+                    a.get("angular_velocity_ate_correlation")
                 ])
 
     seg_csv = raw / "diagnostic_worst_segments.csv"
@@ -497,14 +653,14 @@ def write_csvs(out, analyses):
         w.writerow([
             "Algorithm", "Rank", "Distance start [m]", "Distance end [m]", "Poses",
             "Mean ATE [m]", "Max ATE [m]", "Mean speed [m/s]",
-            "Mean acceleration [m/s²]"
+            "Mean acceleration [m/s²]", "Mean angular velocity [rad/s]"
         ])
         for a in analyses:
             for rank, s in enumerate(a["worst_segments"], 1):
                 w.writerow([
                     a["name"], rank, s["distance_start_m"], s["distance_end_m"], s["poses"],
                     s["mean_ate_m"], s["max_ate_m"], s["mean_speed_m_s"],
-                    s.get("mean_acceleration_m_s2")
+                    s.get("mean_acceleration_m_s2"), s.get("mean_angular_velocity_rad_s")
                 ])
     return str(motion_csv), str(seg_csv)
 
@@ -569,6 +725,7 @@ def main():
     ap.add_argument("--out-dir", required=True)
     ap.add_argument("--dataset-name", required=True)
     ap.add_argument("--output-root", required=True)
+    ap.add_argument("--sbg", default="", help="Optional SBG raw .bin for measured angular velocity")
     args = ap.parse_args()
 
     out = Path(args.out_dir).resolve(); out.mkdir(parents=True, exist_ok=True)
@@ -576,10 +733,23 @@ def main():
     overall_metrics = json.loads(Path(args.metrics).read_text())
     ref = read_traj(manifest["rts"]); ensure_reference_length(ref); ensure_reference_speed(ref)
 
+    angular = None
+    sbg_path = resolve_sbg_path(args.sbg, manifest)
+    if sbg_path is not None:
+        try:
+            angular = load_sbg_gyro(sbg_path)
+            print(
+                f"SBG angular velocity: {angular['samples']} samples from {angular['source']}"
+            )
+        except Exception as e:
+            print(f"WARNING: SBG angular-velocity analysis unavailable: {e}")
+    else:
+        print("WARNING: no SBG .bin found; angular-velocity diagnostics will be unavailable.")
+
     analyses = []
     for alg in manifest.get("estimates", []):
         try:
-            analyses.append(analyze_algorithm(ref, alg["traj"], alg))
+            analyses.append(analyze_algorithm(ref, alg["traj"], alg, angular=angular))
         except Exception as e:
             print(f"WARNING: diagnostic analysis failed for {alg.get('name')}: {e}")
 
@@ -606,6 +776,8 @@ def main():
             "segment_length_m": SEGMENT_LENGTH_M,
             "rpe_distance_m": RPE_DISTANCE_M,
             "alignment": "Rigid SE(3), no scale; RTS position interpolated at estimate timestamps",
+            "angular_velocity_source": str(sbg_path) if sbg_path is not None else None,
+            "angular_velocity_definition": "SBG body gyro magnitude [rad/s]",
         },
         "best_moving_overall": best_moving,
         "best_by_speed": best_by_speed,
