@@ -214,19 +214,65 @@ class PipelineWorker(QObject):
             sensor_bag = cache_dir / f"{dataset_name}_sensor.bag"
 
             self.progress.emit(3, "Validating dataset")
-            for key in ("pcap", "metadata", "sbg", "rts"):
+            for key in ("pcap", "metadata", "sbg"):
                 p = Path(os.path.expanduser(self.dataset[key]))
                 if not p.is_file():
                     raise RuntimeError(f"Missing {key}: {p}")
 
+            rts_text = (self.dataset.get("rts") or "").strip()
+            if rts_text and not Path(os.path.expanduser(rts_text)).is_file():
+                raise RuntimeError(f"RTS path was provided but is invalid: {rts_text}")
+
             self._emit(f"Run directory: {run_dir}")
+
+            # Resolve the evaluation reference. RTS has priority; when it is not
+            # supplied, build a local ENU reference from SBG GNSS/navigation logs.
+            reference_metadata = {}
+            if rts_text:
+                reference_path = Path(os.path.expanduser(rts_text)).resolve()
+                reference_source = "RTS"
+                reference_label = "RTS Ground Truth"
+                self._emit(f"Reference trajectory: RTS ({reference_path})")
+            else:
+                self.progress.emit(5, "Building SBG GNSS reference")
+                reference_path = run_dir / "sbg_gnss_reference.traj"
+                reference_meta_path = run_dir / "sbg_gnss_reference_metadata.json"
+                converter = self.project_dir / "sbg_gnss_to_traj.py"
+                cmd = (
+                    f"python3 {shlex.quote(str(converter))} "
+                    f"--sbg {shlex.quote(self.dataset['sbg'])} "
+                    f"--output {shlex.quote(str(reference_path))} "
+                    f"--metadata-out {shlex.quote(str(reference_meta_path))} "
+                    f"--rate-hz 10"
+                )
+                self._run(cmd, run_dir)
+                if not reference_path.is_file():
+                    raise RuntimeError("SBG GNSS fallback did not create a reference trajectory.")
+                if reference_meta_path.is_file():
+                    reference_metadata = json.loads(reference_meta_path.read_text())
+                source_name = reference_metadata.get("source", "SBG GNSS/INS")
+                if source_name == "SBG GPS1 raw GNSS":
+                    reference_source = "SBG_GNSS"
+                    reference_label = "SBG GNSS Reference"
+                else:
+                    reference_source = "SBG_GNSS_INS"
+                    reference_label = "SBG GNSS/INS Reference"
+                acc = reference_metadata.get("accuracy_1sigma_m", {})
+                self._emit(
+                    f"Reference trajectory: {reference_label}; "
+                    f"median horizontal 1σ ≈ {acc.get('horizontal_median', float('nan')):.3f} m"
+                )
 
             # Persist run identity so the GUI can build a cross-dataset leaderboard.
             (run_dir / "run_metadata.json").write_text(json.dumps({
                 "dataset_name": dataset_name,
                 "created_at": datetime.now().isoformat(),
-                "rts": str(Path(self.dataset["rts"]).resolve()),
+                "rts": str(Path(os.path.expanduser(rts_text)).resolve()) if rts_text else "",
                 "sbg": str(Path(self.dataset["sbg"]).resolve()),
+                "reference_traj": str(reference_path),
+                "reference_source": reference_source,
+                "reference_label": reference_label,
+                "reference_metadata": reference_metadata,
                 "algorithms": [a.get("name", a.get("id", "")) for a in self.algorithms],
             }, indent=2), encoding="utf-8")
 
@@ -372,7 +418,10 @@ class PipelineWorker(QObject):
 
             self.progress.emit(82, "Comparing trajectories with Trajectopy")
             manifest = {
-                "rts": str(Path(self.dataset["rts"]).resolve()),
+                "rts": str(reference_path),
+                "reference_source": reference_source,
+                "reference_label": reference_label,
+                "reference_metadata": reference_metadata,
                 "estimates": estimates,
             }
             manifest_path = run_dir / "comparison_manifest.json"
@@ -431,6 +480,8 @@ class PipelineWorker(QObject):
                 "metrics": metrics,
                 "results_dir": str(results_dir),
                 "diagnostics": diagnostics,
+                "reference_label": reference_label,
+                "reference_source": reference_source,
                 "plots": {
                     # Only the core plots shown by the focused GUI.
                     "xy": str(results_dir / "combined_xy.png"),

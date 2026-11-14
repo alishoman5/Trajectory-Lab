@@ -24,6 +24,7 @@ from compare_multi import (
     build_processing_settings,
     evaluate_one,
 )
+from sbg_gnss_to_traj import convert_sbg_to_reference
 from performance_analysis import (
     _relationship_trend_data,
     analyze_algorithm,
@@ -104,6 +105,30 @@ def write_synthetic_sbg(path):
         struct.pack_into("<3f", p, 20, 0.0, 0.0, 0.0)
         struct.pack_into("<I", p, 32, 0)
         chunks.append(_sbg_frame(7, bytes(p)))
+
+    # Raw GPS1 position/velocity: valid RTK-int position + Doppler velocity.
+    # Roughly 1 m east every 0.5 s around Bonn latitude.
+    lat0 = 50.7374
+    lon0 = 7.0982
+    dlon = 1.0 / (111320.0 * math.cos(math.radians(lat0)))
+    for idx, sensor_us in enumerate([0, 500_000, 1_000_000, 1_500_000, 2_000_000]):
+        status_pos = (7 << 6)  # status=SOL_COMPUTED, type=RTK_INT
+        p = bytearray(59)
+        struct.pack_into("<III", p, 0, sensor_us, status_pos, idx * 500)
+        struct.pack_into("<d", p, 12, lat0)
+        struct.pack_into("<d", p, 20, lon0 + idx * dlon)
+        struct.pack_into("<d", p, 28, 100.0)
+        struct.pack_into("<f", p, 36, 45.0)
+        struct.pack_into("<3f", p, 40, 0.02, 0.02, 0.04)
+        chunks.append(_sbg_frame(14, bytes(p)))
+
+        status_vel = (2 << 6)  # status=SOL_COMPUTED, type=DOPPLER
+        v = bytearray(44)
+        struct.pack_into("<III", v, 0, sensor_us, status_vel, idx * 500)
+        struct.pack_into("<3f", v, 12, 0.0, 2.0, 0.0)  # N,E,D
+        struct.pack_into("<3f", v, 24, 0.02, 0.02, 0.03)
+        struct.pack_into("<2f", v, 36, 90.0, 1.0)
+        chunks.append(_sbg_frame(13, bytes(v)))
 
     for sensor_us, omega in [
         (0, 0.10),
@@ -298,7 +323,7 @@ def main():
         require(all(Path(p).is_file() for p in diag_paths.values()), "one or more diagnostic plots were not written")
         passed(
             "focused motion diagnostics",
-            "distance, speed, RTS acceleration, IMU acceleration, angular velocity and failure-heatmap outputs generated"
+            "distance, speed, reference acceleration, IMU acceleration, angular velocity and failure-heatmap outputs generated"
         )
 
         # Validate the pure-Python SBG UTC/gyro parser used by saved-run diagnostics.
@@ -317,6 +342,28 @@ def main():
         passed(
             "SBG motion parser",
             "UTC, gyro and quaternion decoded; stationary gravity-compensated acceleration ≈ 0"
+        )
+
+        # Validate the GNSS fallback converter used when RTS is omitted.
+        gnss_ref = root / "sbg_gnss_reference.traj"
+        gnss_meta = root / "sbg_gnss_reference_metadata.json"
+        meta = convert_sbg_to_reference(
+            sbg_path, gnss_ref, metadata_path=gnss_meta, rate_hz=10.0
+        )
+        require(gnss_ref.is_file(), "GNSS fallback did not create a .traj file")
+        require(gnss_meta.is_file(), "GNSS fallback metadata was not written")
+        require(meta["source"] == "SBG GPS1 raw GNSS", f"unexpected GNSS source: {meta['source']}")
+        gnss_traj = read_traj(gnss_ref)
+        ensure_reference_length(gnss_traj)
+        require(len(gnss_traj["t"]) >= 10, "GNSS fallback trajectory was not resampled")
+        require(float(gnss_traj["length"][-1]) > 3.0, "GNSS fallback path length is implausible")
+        require(
+            meta["accuracy_1sigma_m"]["horizontal_median"] < 0.1,
+            "GNSS accuracy metadata was not preserved"
+        )
+        passed(
+            "SBG GNSS reference fallback",
+            f"{len(gnss_traj['t'])} poses generated from raw GPS1 position/velocity"
         )
 
         # Case 3: scale is deliberately NOT estimated. A 2% scale error should remain

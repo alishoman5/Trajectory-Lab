@@ -292,7 +292,7 @@ def ensure_reference_length(ref):
 
 
 def ensure_reference_speed(ref):
-    """Populate smoothed platform speed and acceleration magnitude from RTS data."""
+    """Populate smoothed platform speed and acceleration magnitude from the reference trajectory."""
     t = ref["t"]
     vel = ref["vel"]
     if vel.shape == ref["pos"].shape and np.all(np.isfinite(vel)):
@@ -703,7 +703,7 @@ def plot_results(out, analyses):
         p = a["_plot"]
         if len(p["distance"]):
             ax.plot(p["distance"], p["error"], linewidth=1.5, label=a["name"])
-    ax.set_xlabel("RTS travelled distance from movement start [m]")
+    ax.set_xlabel("Reference travelled distance from movement start [m]")
     ax.set_ylabel("3D position error [m]")
     ax.set_title("3D ATE along the moving trajectory")
     ax.grid(True); ax.legend(); fig.tight_layout()
@@ -719,7 +719,7 @@ def plot_results(out, analyses):
             _plot_relationship(ax, p["speed"], p["error"], a["name"], corr)
     ax.axvline(LOW_MAX, linestyle="--", linewidth=1)
     ax.axvline(MEDIUM_MAX, linestyle="--", linewidth=1)
-    ax.set_xlabel("RTS platform speed [m/s]"); ax.set_ylabel("3D position error [m]")
+    ax.set_xlabel("Reference platform speed [m/s]"); ax.set_ylabel("3D position error [m]")
     ax.set_title("ATE vs platform speed")
     ax.grid(True); ax.legend(); fig.tight_layout()
     path = out / "diagnostic_ate_vs_speed.png"
@@ -732,7 +732,7 @@ def plot_results(out, analyses):
         if len(p["acceleration"]):
             corr = a.get("acceleration_ate_correlation")
             _plot_relationship(ax, p["acceleration"], p["error"], a["name"], corr)
-    ax.set_xlabel("RTS acceleration magnitude [m/s²]"); ax.set_ylabel("3D position error [m]")
+    ax.set_xlabel("Reference acceleration magnitude [m/s²]"); ax.set_ylabel("3D position error [m]")
     ax.set_title("ATE vs platform acceleration")
     ax.grid(True); ax.legend(); fig.tight_layout()
     path = out / "diagnostic_ate_vs_acceleration.png"
@@ -806,7 +806,7 @@ def plot_results(out, analyses):
     ax.set_yticks(np.arange(len(analyses))); ax.set_yticklabels([a["name"] for a in analyses])
     ax.set_xticks(np.arange(nbins))
     ax.set_xticklabels([f"{b*5}–{(b+1)*5}" for b in range(nbins)], rotation=45, ha="right")
-    ax.set_xlabel("RTS distance segment [m]"); ax.set_title("Mean ATE by 5 m segment")
+    ax.set_xlabel("Reference distance segment [m]"); ax.set_title("Mean ATE by 5 m segment")
     cb = fig.colorbar(im, ax=ax); cb.set_label("Mean ATE [m]")
     fig.tight_layout()
     path = out / "diagnostic_segment_heatmap.png"
@@ -968,7 +968,7 @@ def main():
             "medium_max_m_s": MEDIUM_MAX,
             "segment_length_m": SEGMENT_LENGTH_M,
             "rpe_distance_m": RPE_DISTANCE_M,
-            "alignment": "Rigid SE(3), no scale; RTS position interpolated at estimate timestamps",
+            "alignment": "Rigid SE(3), no scale; reference position interpolated at estimate timestamps",
             "angular_velocity_source": str(sbg_path) if sbg_path is not None else None,
             "angular_velocity_definition": "SBG body gyro magnitude [rad/s]",
             "imu_linear_acceleration_definition": (
