@@ -60,7 +60,7 @@ Shows the worst 5 m sections with:
 
 ## Focused plots
 
-The GUI shows six plots:
+The GUI shows seven plots:
 
 1. Trajectory vs RTS
 2. ATE Along Route
@@ -69,6 +69,8 @@ The GUI shows six plots:
 5. ATE vs Acceleration
 6. ATE vs Angular Velocity
 7. Failure Heatmap
+
+The three motion relationship plots keep the raw scatter points and add a dashed linear trend line plus a solid equal-width binned-mean curve. These curves are descriptive aids only and do not imply causation.
 
 Detailed Trajectopy properties, aligned trajectories, covariance/correlation plots and per-algorithm audit files are still preserved under:
 

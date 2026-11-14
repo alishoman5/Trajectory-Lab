@@ -25,6 +25,7 @@ from compare_multi import (
     evaluate_one,
 )
 from performance_analysis import (
+    _relationship_trend_data,
     analyze_algorithm,
     ensure_reference_length,
     ensure_reference_speed,
@@ -165,6 +166,17 @@ def main():
 
     profiles = profile_checks()
     passed("algorithm profile schema", f"{len(profiles)} profiles checked")
+
+    x_fit, y_fit, bin_x, bin_y = _relationship_trend_data(
+        np.arange(12, dtype=float),
+        2.0 * np.arange(12, dtype=float) + 1.0,
+        bins=6,
+    )
+    require(x_fit is not None and y_fit is not None, "linear trend was not generated")
+    require(len(bin_x) >= 2 and len(bin_y) == len(bin_x), "binned-mean curve was not generated")
+    near(y_fit[0], 1.0, 1e-9, "linear trend intercept is incorrect")
+    near(y_fit[-1], 23.0, 1e-9, "linear trend slope is incorrect")
+    passed("motion trend curves", "linear fit and binned means generated deterministically")
 
     mag = _ate_magnitude(np.array([[3.0, 4.0, 0.0], [-1.0, -2.0, -2.0]]), expected_samples=2)
     require(np.allclose(mag, [5.0, 3.0]), "3D ATE magnitude helper is incorrect")

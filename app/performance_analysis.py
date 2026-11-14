@@ -524,6 +524,65 @@ def make_findings(dataset_name, overall_metrics, analyses, best_by_speed, best_r
     return findings
 
 
+def _relationship_trend_data(x, y, bins=6):
+    """Return a linear fit plus equal-width binned means for a scatter plot."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    valid = np.isfinite(x) & np.isfinite(y)
+    x = x[valid]
+    y = y[valid]
+
+    if len(x) < 3 or np.ptp(x) <= 1e-12:
+        return None, None, np.array([]), np.array([])
+
+    coeff = np.polyfit(x, y, 1)
+    x_fit = np.linspace(float(np.min(x)), float(np.max(x)), 100)
+    y_fit = coeff[0] * x_fit + coeff[1]
+
+    edges = np.linspace(float(np.min(x)), float(np.max(x)), bins + 1)
+    centers = []
+    means = []
+    for i in range(bins):
+        if i == bins - 1:
+            mask = (x >= edges[i]) & (x <= edges[i + 1])
+        else:
+            mask = (x >= edges[i]) & (x < edges[i + 1])
+        if np.count_nonzero(mask) >= 2:
+            centers.append(float(np.mean(x[mask])))
+            means.append(float(np.mean(y[mask])))
+
+    return x_fit, y_fit, np.asarray(centers), np.asarray(means)
+
+
+def _plot_relationship(ax, x, y, name, corr):
+    """Scatter + linear trend + binned mean, without implying causation."""
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    valid = np.isfinite(x) & np.isfinite(y)
+    if np.count_nonzero(valid) == 0:
+        return
+
+    label = name if corr is None else f"{name} (r={corr:+.2f})"
+    scatter = ax.scatter(x[valid], y[valid], s=18, alpha=0.45, label=label)
+
+    color = scatter.get_facecolors()[0] if len(scatter.get_facecolors()) else None
+    x_fit, y_fit, bin_x, bin_y = _relationship_trend_data(x[valid], y[valid])
+
+    if x_fit is not None:
+        ax.plot(
+            x_fit, y_fit,
+            linestyle="--", linewidth=1.8, alpha=0.9,
+            color=color, label=f"{name} linear trend"
+        )
+
+    if len(bin_x) >= 2:
+        ax.plot(
+            bin_x, bin_y,
+            marker="o", linewidth=2.4, markersize=5,
+            color=color, label=f"{name} binned mean"
+        )
+
+
 def plot_results(out, analyses):
     """Generate only plots that answer a diagnostic question.
 
@@ -550,8 +609,7 @@ def plot_results(out, analyses):
         p = a["_plot"]
         if len(p["speed"]):
             corr = a.get("speed_ate_correlation")
-            label = a["name"] if corr is None else f"{a['name']} (r={corr:+.2f})"
-            ax.scatter(p["speed"], p["error"], s=18, alpha=0.55, label=label)
+            _plot_relationship(ax, p["speed"], p["error"], a["name"], corr)
     ax.axvline(LOW_MAX, linestyle="--", linewidth=1)
     ax.axvline(MEDIUM_MAX, linestyle="--", linewidth=1)
     ax.set_xlabel("RTS platform speed [m/s]"); ax.set_ylabel("3D position error [m]")
@@ -566,8 +624,7 @@ def plot_results(out, analyses):
         p = a["_plot"]
         if len(p["acceleration"]):
             corr = a.get("acceleration_ate_correlation")
-            label = a["name"] if corr is None else f"{a['name']} (r={corr:+.2f})"
-            ax.scatter(p["acceleration"], p["error"], s=18, alpha=0.55, label=label)
+            _plot_relationship(ax, p["acceleration"], p["error"], a["name"], corr)
     ax.set_xlabel("RTS acceleration magnitude [m/s²]"); ax.set_ylabel("3D position error [m]")
     ax.set_title("ATE vs platform acceleration")
     ax.grid(True); ax.legend(); fig.tight_layout()
@@ -587,8 +644,9 @@ def plot_results(out, analyses):
             valid = np.isfinite(omega)
             if np.any(valid):
                 corr = a.get("angular_velocity_ate_correlation")
-                label = a["name"] if corr is None else f"{a['name']} (r={corr:+.2f})"
-                ax.scatter(omega[valid], p["error"][valid], s=18, alpha=0.55, label=label)
+                _plot_relationship(
+                    ax, omega[valid], p["error"][valid], a["name"], corr
+                )
         ax.set_xlabel("SBG angular velocity magnitude [rad/s]")
         ax.set_ylabel("3D position error [m]")
         ax.set_title("ATE vs angular velocity")
