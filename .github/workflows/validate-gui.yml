@@ -56,10 +56,10 @@ jobs:
           window = trajectory_lab.MainWindow()
 
           assert window.results_tabs.count() == 3, window.results_tabs.count()
-          assert window.plot_tabs.count() == 7, window.plot_tabs.count()
+          assert window.plot_tabs.count() == 8, window.plot_tabs.count()
           assert window.results_table.columnCount() == 7
-          assert window.insights_table.columnCount() == 9
-          assert window.failure_table.columnCount() == 10
+          assert window.insights_table.columnCount() == 10
+          assert window.failure_table.columnCount() == 11
 
           result_tabs = [window.results_tabs.tabText(i) for i in range(window.results_tabs.count())]
           plot_tabs = [window.plot_tabs.tabText(i) for i in range(window.plot_tabs.count())]
