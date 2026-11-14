@@ -13,6 +13,7 @@ Run with the dedicated Trajectopy interpreter:
 import argparse
 import json
 import math
+import struct
 import tempfile
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from performance_analysis import (
     analyze_algorithm,
     ensure_reference_length,
     ensure_reference_speed,
+    load_sbg_gyro,
     plot_results,
     read_traj,
     rigid_align,
@@ -64,6 +66,48 @@ def write_traj(path, t, pos, name):
                 f"{pos[i,0]:.9f},{pos[i,1]:.9f},{pos[i,2]:.9f},"
                 f"{vel[i,0]:.9f},{vel[i,1]:.9f},{vel[i,2]:.9f}\n"
             )
+
+
+def _sbg_frame(msg_id, payload, msg_class=0):
+    return (
+        bytes([0xFF, 0x5A, msg_id, msg_class])
+        + struct.pack("<H", len(payload))
+        + payload
+        + b"\x00\x00"
+        + bytes([0x33])
+    )
+
+
+def write_synthetic_sbg(path):
+    """Create a minimal SBG ECom stream for parser validation."""
+    chunks = []
+
+    def utc_payload(sensor_us, minute, second):
+        p = bytearray(21)
+        struct.pack_into("<IH", p, 0, sensor_us, 0)
+        struct.pack_into("<H", p, 6, 2026)
+        struct.pack_into("<5B", p, 8, 7, 15, 9, minute, second)
+        struct.pack_into("<I", p, 13, 0)
+        struct.pack_into("<i", p, 17, 0)
+        return bytes(p)
+
+    chunks.append(_sbg_frame(2, utc_payload(0, 0, 0)))
+    chunks.append(_sbg_frame(2, utc_payload(2_000_000, 0, 2)))
+
+    for sensor_us, omega in [
+        (0, 0.10),
+        (500_000, 0.20),
+        (1_000_000, 0.30),
+        (1_500_000, 0.40),
+        (2_000_000, 0.50),
+    ]:
+        p = bytearray(58)
+        struct.pack_into("<IH", p, 0, sensor_us, 0)
+        struct.pack_into("<3f", p, 6, 0.0, 0.0, 9.81)
+        struct.pack_into("<3f", p, 18, 0.0, 0.0, omega)
+        chunks.append(_sbg_frame(3, bytes(p)))
+
+    Path(path).write_bytes(b"".join(chunks))
 
 
 def rigid_transform(points):
@@ -193,28 +237,47 @@ def main():
         ref_diag = read_traj(ref_path)
         ensure_reference_length(ref_diag)
         ensure_reference_speed(ref_diag)
+        synthetic_angular = {
+            "t": t,
+            "angular_velocity": 0.15 + 0.08 * np.sin(np.linspace(0.0, 8.0, len(t))),
+        }
         diag = analyze_algorithm(
             ref_diag,
             distorted_path,
             {"id": "synthetic", "name": "Synthetic"},
+            angular=synthetic_angular,
         )
         require("speed_ate_correlation" in diag, "speed correlation missing from diagnostics")
         require("acceleration_ate_correlation" in diag, "acceleration correlation missing from diagnostics")
+        require("angular_velocity_ate_correlation" in diag, "angular-velocity correlation missing from diagnostics")
         require(
             len(diag["_plot"]["acceleration"]) == diag["moving_poses"],
             "acceleration diagnostic sample count mismatch"
         )
+        require(
+            len(diag["_plot"]["angular_velocity"]) == diag["moving_poses"],
+            "angular-velocity diagnostic sample count mismatch"
+        )
         diag_out = root / "diagnostic_plots"; diag_out.mkdir()
         diag_paths = plot_results(diag_out, [diag])
         require(
-            set(diag_paths) == {"ate_distance", "ate_speed", "ate_acceleration", "segment_heatmap"},
+            set(diag_paths) == {"ate_distance", "ate_speed", "ate_acceleration", "ate_angular_velocity", "segment_heatmap"},
             f"unexpected diagnostic plot set: {sorted(diag_paths)}"
         )
         require(all(Path(p).is_file() for p in diag_paths.values()), "one or more diagnostic plots were not written")
         passed(
             "focused motion diagnostics",
-            "distance, speed, acceleration and failure-heatmap outputs generated"
+            "distance, speed, acceleration, angular velocity and failure-heatmap outputs generated"
         )
+
+        # Validate the pure-Python SBG UTC/gyro parser used by saved-run diagnostics.
+        sbg_path = root / "synthetic_sbg.bin"
+        write_synthetic_sbg(sbg_path)
+        sbg = load_sbg_gyro(sbg_path)
+        require(sbg["samples"] == 5, f"unexpected synthetic SBG sample count: {sbg['samples']}")
+        require(np.all(np.isfinite(sbg["angular_velocity"])), "non-finite SBG angular velocity")
+        require(float(np.max(sbg["angular_velocity"])) > 0.25, "SBG gyro magnitude was not parsed")
+        passed("SBG angular-velocity parser", "UTC timestamps and body gyro magnitudes decoded")
 
         # Case 3: scale is deliberately NOT estimated. A 2% scale error should remain
         # visible in both global position error and local distance drift.
