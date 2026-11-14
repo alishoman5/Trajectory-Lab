@@ -360,7 +360,7 @@ class MainWindow(QMainWindow):
         page, l = self.page_shell()
         l.addWidget(self.title_block(
             "Dataset",
-            "Choose the raw sensor files. Auto-detect can populate a folder containing one Ouster PCAP, metadata JSON, SBG binary log and RTS trajectory."
+            "Choose the raw sensor files. RTS is optional: when it is not provided, Trajectory Lab builds a local reference from SBG GNSS/navigation data."
         ))
 
         g = QGroupBox("Input files")
@@ -368,7 +368,7 @@ class MainWindow(QMainWindow):
         self.pcap = FileRow("Ouster PCAP", "PCAP (*.pcap);;All files (*)")
         self.metadata = FileRow("Metadata JSON", "JSON (*.json);;All files (*)")
         self.sbg = FileRow("SBG binary", "Binary (*.bin);;All files (*)")
-        self.rts = FileRow("RTS trajectory", "Trajectory (*.traj);;All files (*)")
+        self.rts = FileRow("RTS trajectory (optional)", "Trajectory (*.traj);;All files (*)")
         for row in (self.pcap, self.metadata, self.sbg, self.rts):
             gl.addWidget(row)
 
@@ -508,16 +508,17 @@ class MainWindow(QMainWindow):
             "Detailed Trajectopy audit files remain available under comparison/raw/."
         ))
 
-        note = QLabel(
-            "ATE and RPE come from Trajectopy after nearest-timestamp matching and rigid 6-DoF alignment to RTS "
-            "(translation + rotation, no scale). Motion correlations are diagnostic associations, not proof of causation."
+        self.reference_note = QLabel(
+            "ATE and RPE use the selected reference trajectory: RTS when available, otherwise an SBG GNSS/GNSS-INS fallback. "
+            "Alignment is rigid 6-DoF (translation + rotation, no scale). GNSS fallback accuracy is lower than RTS and must be interpreted accordingly. "
+            "Motion correlations are diagnostic associations, not proof of causation."
         )
-        note.setWordWrap(True)
-        note.setStyleSheet(
+        self.reference_note.setWordWrap(True)
+        self.reference_note.setStyleSheet(
             "background:#151c2b;border:1px solid #2d3a52;border-radius:8px;"
             "padding:9px 12px;color:#b9c6da;"
         )
-        l.addWidget(note)
+        l.addWidget(self.reference_note)
 
         self.results_tabs = QTabWidget()
         self.results_tabs.setMinimumHeight(205)
@@ -749,6 +750,7 @@ class MainWindow(QMainWindow):
         sbg_bins = [x for x in bins if x.name.lower().startswith("sbg")]
         if sbg_bins: self.sbg.setText(str(sbg_bins[0]))
         elif bins: self.sbg.setText(str(bins[0]))
+        self.rts.setText("")
         rts_trajs = [x for x in trajs if x.name.lower().startswith("rts")]
         if rts_trajs:
             self.rts.setText(str(rts_trajs[0]))
@@ -764,18 +766,31 @@ class MainWindow(QMainWindow):
             "sbg": self.sbg.text(),
             "rts": self.rts.text(),
         }
-        missing = [k for k, v in paths.items() if not v or not Path(v).is_file()]
+        required_paths = ("pcap", "metadata", "sbg")
+        missing = [k for k in required_paths if not paths[k] or not Path(paths[k]).is_file()]
         if missing:
             self.dataset_status.setText("Missing or invalid: " + ", ".join(missing))
             self.dataset_status.setStyleSheet("color:#ef9090;")
             return False
+
+        if paths["rts"] and not Path(paths["rts"]).is_file():
+            self.dataset_status.setText("RTS path is invalid. Clear it to use SBG GNSS fallback.")
+            self.dataset_status.setStyleSheet("color:#ef9090;")
+            return False
+
         try:
             meta = json.loads(Path(paths["metadata"]).read_text())
             text = json.dumps(meta)
             required = ["TIME_FROM_SYNC_PULSE_IN", "INPUT_NMEA_UART", "nmea_leap_seconds"]
             timing_ok = all(x in text for x in required)
             timing_msg = "Ouster PPS/NMEA timing profile detected." if timing_ok else "Metadata does not match the current PPS/NMEA converter profile."
-            self.dataset_status.setText("All files found. " + timing_msg)
+
+            if paths["rts"]:
+                ref_msg = "Reference: RTS trajectory."
+            else:
+                ref_msg = "Reference: SBG GNSS fallback will be generated at run time."
+
+            self.dataset_status.setText(f"Core files found. {ref_msg} {timing_msg}")
             self.dataset_status.setStyleSheet("color:#7dd3a7;" if timing_ok else "color:#e6b76a;")
             return timing_ok
         except Exception as e:
@@ -794,8 +809,10 @@ class MainWindow(QMainWindow):
     def update_run_summary(self):
         algs = self.selected_algorithms()
         names = ", ".join(a["name"] for a in algs) or "none"
+        reference = "RTS Ground Truth" if self.rts.text() else "SBG GNSS fallback"
         self.run_summary.setText(
             f"Dataset: {self.dataset_name.text().strip() or 'dataset'}\n"
+            f"Reference: {reference}\n"
             f"Algorithms: {names}\n"
             f"RPE distance buckets: {self.rpe_min.value():.1f}–{self.rpe_max.value():.1f} m, step {self.rpe_step.value():.1f} m\n"
             f"Sensor bag conversion: {'reuse cache when available' if self.reuse_bag.isChecked() else 'rebuild every run'}"
@@ -887,6 +904,13 @@ class MainWindow(QMainWindow):
         self.run_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.last_run = result
+        reference_label = result.get("reference_label", "Reference")
+        reference_source = result.get("reference_source", "")
+        self.reference_note.setText(
+            f"Reference used: {reference_label} ({reference_source}). "
+            "ATE/RPE are computed after nearest-timestamp matching and rigid 6-DoF alignment "
+            "(translation + rotation, no scale). If the reference is SBG GNSS/GNSS-INS, its own positioning uncertainty limits how the error should be interpreted."
+        )
         self.populate_results(result["metrics"])
         self.populate_diagnostics(result.get("diagnostics", {}))
 
@@ -1110,6 +1134,7 @@ class MainWindow(QMainWindow):
             return
         try:
             metrics = json.loads(metrics_file.read_text())
+            manifest_data = json.loads(manifest.read_text())
             perf_file = results_dir / "performance_analysis.json"
 
             # Re-run the lightweight diagnostics every time a saved run is loaded.
@@ -1146,6 +1171,8 @@ class MainWindow(QMainWindow):
             result = {
                 "run_dir": str(run_dir),
                 "metrics": metrics,
+                "reference_label": manifest_data.get("reference_label", "RTS Ground Truth"),
+                "reference_source": manifest_data.get("reference_source", "RTS"),
                 "diagnostics": diagnostics,
                 "plots": {
                     "xy": str(results_dir / "combined_xy.png"),
