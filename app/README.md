@@ -75,7 +75,7 @@ Shows the worst 5 m sections with:
 
 The GUI shows seven plots:
 
-1. Trajectory vs RTS
+1. Trajectory vs Reference
 2. ATE Along Route
 3. RPE vs Distance
 4. ATE vs Speed
