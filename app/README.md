@@ -1,6 +1,6 @@
 # Trajectory Lab GUI — focused trajectory evaluation
 
-ROS1 Noetic toolbox for running multiple LiDAR/LiDAR-inertial trajectory estimators on the same synchronized dataset and evaluating them against RTS with **Trajectopy**.
+ROS1 Noetic toolbox for running multiple LiDAR/LiDAR-inertial trajectory estimators on the same synchronized dataset and evaluating them with **Trajectopy**. RTS is the preferred reference. If RTS is not provided, the GUI automatically builds a local ENU reference from the SBG binary log.
 
 ## Included algorithm profiles
 
@@ -8,6 +8,18 @@ ROS1 Noetic toolbox for running multiple LiDAR/LiDAR-inertial trajectory estimat
 - **FAST-LIO2** — configured
 - **HDL Graph SLAM (NDT_OMP + LM + Loops)** — configured
 - **KISS-ICP** — placeholder until its ROS wrapper is configured
+
+## Evaluation reference
+
+Reference priority:
+
+1. **RTS trajectory** when an RTS `.traj` is supplied.
+2. **SBG GPS1 raw GNSS** position/velocity when RTS is blank.
+3. **SBG GNSS/INS EKF_NAV** only when raw GPS1 position is not present in the SBG log.
+
+The SBG fallback converter reads UTC timing from the same binary log, converts WGS84 latitude/longitude/height to a local ENU frame, and resamples the reference to 10 Hz for temporal matching. It also saves the reported 1σ horizontal/vertical positioning accuracy in `sbg_gnss_reference_metadata.json`.
+
+GNSS/GNSS-INS is a fallback reference, not equivalent to RTS ground truth. ATE/RPE values are limited by the reference positioning uncertainty.
 
 ## Evaluation policy
 
@@ -43,7 +55,7 @@ Answers: **Under which motion conditions does the error increase?**
 Shows:
 - moving-only ATE
 - speed ↔ ATE correlation
-- RTS acceleration ↔ ATE correlation
+- reference acceleration ↔ ATE correlation
 - gravity-compensated SBG linear-acceleration ↔ ATE correlation
 - measured SBG angular-velocity ↔ ATE correlation
 - low / medium / high-speed ATE
@@ -67,7 +79,7 @@ The GUI shows seven plots:
 2. ATE Along Route
 3. RPE vs Distance
 4. ATE vs Speed
-5. ATE vs RTS Acceleration
+5. ATE vs Reference Acceleration
 6. ATE vs IMU Acceleration
 7. ATE vs Angular Velocity
 8. Failure Heatmap
@@ -92,9 +104,9 @@ Current speed bins:
 - Medium: 1.20–1.60 m/s
 - High: >1.60 m/s
 
-RTS acceleration magnitude is derived from the RTS velocity trajectory and is kept as an external ground-truth motion descriptor.
+reference acceleration magnitude is derived from the RTS velocity trajectory and is kept as an external ground-truth motion descriptor.
 
-SBG IMU linear acceleration is derived from the recorded body-frame accelerometer specific force. The SBG EKF quaternion rotates the measurement from body to NED, the project converts NED to ENU, and gravity is removed before taking the 3D magnitude. This makes the IMU-acceleration diagnostic closer to the measurement stream used by LIO-SAM than RTS acceleration.
+SBG IMU linear acceleration is derived from the recorded body-frame accelerometer specific force. The SBG EKF quaternion rotates the measurement from body to NED, the project converts NED to ENU, and gravity is removed before taking the 3D magnitude. This makes the IMU-acceleration diagnostic closer to the measurement stream used by LIO-SAM than reference acceleration.
 
 Angular velocity is taken directly from the recorded SBG IMU body gyro and reported as the 3D gyro magnitude in rad/s. For older saved runs, the analyzer first checks run metadata and otherwise uses the single `.bin` file beside the RTS trajectory when that identification is unambiguous.
 
@@ -154,8 +166,8 @@ source ~/catkin_ws/devel/setup.bash
 
 ## Recommended workflow
 
-1. Select or auto-detect PCAP, JSON, SBG BIN and RTS `.traj`.
-2. Validate the dataset.
+1. Select or auto-detect PCAP, JSON and SBG BIN. Add RTS `.traj` when available; otherwise leave RTS blank to use the SBG GNSS fallback.
+2. Validate the dataset and confirm the intended reference source.
 3. Select the configured algorithms.
 4. Run them against the same synchronized sensor bag.
 5. Inspect Overview first.
