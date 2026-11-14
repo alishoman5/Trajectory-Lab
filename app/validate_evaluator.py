@@ -23,7 +23,14 @@ from compare_multi import (
     build_processing_settings,
     evaluate_one,
 )
-from performance_analysis import rigid_align
+from performance_analysis import (
+    analyze_algorithm,
+    ensure_reference_length,
+    ensure_reference_speed,
+    plot_results,
+    read_traj,
+    rigid_align,
+)
 
 try:
     import trajectopy as tpy
@@ -180,6 +187,33 @@ def main():
         passed(
             "independent ATE cross-check",
             f"Trajectopy {distorted_metrics['ate_mean_m']:.5f} m vs independent {independent_mean:.5f} m"
+        )
+
+        # The focused diagnostics must also work end-to-end on the same synthetic files.
+        ref_diag = read_traj(ref_path)
+        ensure_reference_length(ref_diag)
+        ensure_reference_speed(ref_diag)
+        diag = analyze_algorithm(
+            ref_diag,
+            distorted_path,
+            {"id": "synthetic", "name": "Synthetic"},
+        )
+        require("speed_ate_correlation" in diag, "speed correlation missing from diagnostics")
+        require("acceleration_ate_correlation" in diag, "acceleration correlation missing from diagnostics")
+        require(
+            len(diag["_plot"]["acceleration"]) == diag["moving_poses"],
+            "acceleration diagnostic sample count mismatch"
+        )
+        diag_out = root / "diagnostic_plots"; diag_out.mkdir()
+        diag_paths = plot_results(diag_out, [diag])
+        require(
+            set(diag_paths) == {"ate_distance", "ate_speed", "ate_acceleration", "segment_heatmap"},
+            f"unexpected diagnostic plot set: {sorted(diag_paths)}"
+        )
+        require(all(Path(p).is_file() for p in diag_paths.values()), "one or more diagnostic plots were not written")
+        passed(
+            "focused motion diagnostics",
+            "distance, speed, acceleration and failure-heatmap outputs generated"
         )
 
         # Case 3: scale is deliberately NOT estimated. A 2% scale error should remain
