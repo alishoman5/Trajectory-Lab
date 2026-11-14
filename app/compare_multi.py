@@ -586,6 +586,8 @@ def main():
     manifest = json.loads(Path(args.manifest).read_text(encoding="utf-8"))
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
+    audit = out / "raw"
+    audit.mkdir(parents=True, exist_ok=True)
 
     ref_path = Path(manifest["rts"])
     ref_traj = tpy.Trajectory.from_file(str(ref_path))
@@ -598,7 +600,7 @@ def main():
     processing_settings = build_processing_settings(
         args.max_dt, rpe_min, rpe_max, rpe_step, bool(args.rpe_all_pairs)
     )
-    processing_settings.to_file(str(out / "trajectopy_processing_settings.json"))
+    processing_settings.to_file(str(audit / "trajectopy_processing_settings.json"))
 
     eval_meta = {
         "trajectopy_version": safe_version(),
@@ -620,7 +622,7 @@ def main():
             "rotation_unit": "deg/100m when orientation is available",
         },
     }
-    (out / "trajectopy_evaluation_metadata.json").write_text(json.dumps(eval_meta, indent=2), encoding="utf-8")
+    (audit / "trajectopy_evaluation_metadata.json").write_text(json.dumps(eval_meta, indent=2), encoding="utf-8")
 
     results = []
     ate_results = []
@@ -635,7 +637,7 @@ def main():
             raise RuntimeError(f"Missing exported trajectory for {name}: {est_path}")
 
         metrics, ate_result, rpe_result, alignment_result = evaluate_one(
-            ref_traj, est_path, name, alg_id, processing_settings, out
+            ref_traj, est_path, name, alg_id, processing_settings, audit
         )
         metrics["bag"] = est.get("bag", "")
         metrics["topic"] = est.get("topic", "")
@@ -694,9 +696,9 @@ def main():
         }
         for r in results
     }
-    (out / "trajectopy_all_properties.json").write_text(json.dumps(full_props, indent=2), encoding="utf-8")
+    (audit / "trajectopy_all_properties.json").write_text(json.dumps(full_props, indent=2), encoding="utf-8")
 
-    native_plots = save_native_plots(out, ate_results, rpe_results, alignment_results)
+    native_plots = save_native_plots(audit, ate_results, rpe_results, alignment_results)
 
     # Machine-readable index of everything produced by this Trajectopy run.
     output_manifest = {
