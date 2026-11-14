@@ -43,7 +43,8 @@ Answers: **Under which motion conditions does the error increase?**
 Shows:
 - moving-only ATE
 - speed ↔ ATE correlation
-- acceleration ↔ ATE correlation
+- RTS acceleration ↔ ATE correlation
+- gravity-compensated SBG linear-acceleration ↔ ATE correlation
 - measured SBG angular-velocity ↔ ATE correlation
 - low / medium / high-speed ATE
 
@@ -66,9 +67,10 @@ The GUI shows seven plots:
 2. ATE Along Route
 3. RPE vs Distance
 4. ATE vs Speed
-5. ATE vs Acceleration
-6. ATE vs Angular Velocity
-7. Failure Heatmap
+5. ATE vs RTS Acceleration
+6. ATE vs IMU Acceleration
+7. ATE vs Angular Velocity
+8. Failure Heatmap
 
 The three motion relationship plots keep the raw scatter points and add a dashed linear trend line plus a solid equal-width binned-mean curve. These curves are descriptive aids only and do not imply causation.
 
@@ -90,7 +92,9 @@ Current speed bins:
 - Medium: 1.20–1.60 m/s
 - High: >1.60 m/s
 
-Acceleration magnitude is derived from the RTS velocity trajectory and smoothed with the same small median window used for motion diagnostics.
+RTS acceleration magnitude is derived from the RTS velocity trajectory and is kept as an external ground-truth motion descriptor.
+
+SBG IMU linear acceleration is derived from the recorded body-frame accelerometer specific force. The SBG EKF quaternion rotates the measurement from body to NED, the project converts NED to ENU, and gravity is removed before taking the 3D magnitude. This makes the IMU-acceleration diagnostic closer to the measurement stream used by LIO-SAM than RTS acceleration.
 
 Angular velocity is taken directly from the recorded SBG IMU body gyro and reported as the 3D gyro magnitude in rad/s. For older saved runs, the analyzer first checks run metadata and otherwise uses the single `.bin` file beside the RTS trajectory when that identification is unambiguous.
 

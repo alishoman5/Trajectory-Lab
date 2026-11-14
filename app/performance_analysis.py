@@ -46,18 +46,60 @@ SBG_SYNC2 = 0x5A
 SBG_ETX = 0x33
 
 
-def load_sbg_gyro(path):
-    """Read SBG ECom UTC + IMU frames without requiring ROS.
+C_ENU_NED = np.array([
+    [0.0, 1.0,  0.0],
+    [1.0, 0.0,  0.0],
+    [0.0, 0.0, -1.0],
+], dtype=float)
+GRAVITY_ENU = np.array([0.0, 0.0, -9.81], dtype=float)
 
-    Returns Unix timestamps and body angular-speed magnitude in rad/s. The
-    project converter writes the same gyro values directly to ROS Imu
-    angular_velocity, so this diagnostic uses the recorded IMU measurement
-    rather than an angular-rate estimate derived from the trajectory shape.
+
+def _quat_to_matrix(q):
+    w, x, y, z = np.asarray(q, dtype=float)
+    return np.array([
+        [1 - 2*(y*y + z*z), 2*(x*y - z*w),     2*(x*z + y*w)],
+        [2*(x*y + z*w),     1 - 2*(x*x + z*z), 2*(y*z - x*w)],
+        [2*(x*z - y*w),     2*(y*z + x*w),     1 - 2*(x*x + y*y)],
+    ], dtype=float)
+
+
+def _slerp(q0, q1, alpha):
+    q0 = np.asarray(q0, dtype=float)
+    q1 = np.asarray(q1, dtype=float)
+    dot = float(np.dot(q0, q1))
+    if dot < 0.0:
+        q1 = -q1
+        dot = -dot
+    dot = max(-1.0, min(1.0, dot))
+    if dot > 0.9995:
+        q = q0 + alpha * (q1 - q0)
+        return q / np.linalg.norm(q)
+    theta0 = math.acos(dot)
+    sin0 = math.sin(theta0)
+    theta = theta0 * alpha
+    q = (
+        math.sin(theta0 - theta) / sin0 * q0
+        + math.sin(theta) / sin0 * q1
+    )
+    return q / np.linalg.norm(q)
+
+
+def load_sbg_gyro(path):
+    """Read SBG UTC, IMU and EKF quaternion data without ROS.
+
+    Returns:
+      - body angular-speed magnitude [rad/s]
+      - gravity-compensated linear-acceleration magnitude [m/s²]
+
+    SBG IMU acceleration is specific force in body coordinates.  The EKF
+    quaternion is interpreted as body -> NED, converted to ENU, then gravity
+    is added back in ENU to obtain physical linear acceleration.
     """
     path = Path(path).expanduser().resolve()
     data = path.read_bytes()
     utc = []
     imu = []
+    quats = []
 
     i = 0
     n = len(data)
@@ -91,8 +133,15 @@ def load_sbg_gyro(path):
                     pass
         elif msg_class == 0 and msg_id == 3 and len(payload) == 58:
             sensor_us = struct.unpack_from("<I", payload, 0)[0]
+            accel = np.asarray(struct.unpack_from("<3f", payload, 6), dtype=float)
             gyro = np.asarray(struct.unpack_from("<3f", payload, 18), dtype=float)
-            imu.append((sensor_us, float(np.linalg.norm(gyro))))
+            imu.append((sensor_us, accel, float(np.linalg.norm(gyro))))
+        elif msg_class == 0 and msg_id == 7 and len(payload) >= 36:
+            sensor_us = struct.unpack_from("<I", payload, 0)[0]
+            q = np.asarray(struct.unpack_from("<4f", payload, 4), dtype=float)
+            norm = float(np.linalg.norm(q))
+            if norm > 1e-9:
+                quats.append((sensor_us, q / norm))
 
         i += frame_size
 
@@ -106,28 +155,63 @@ def load_sbg_gyro(path):
     clock_offset_ns = int(np.median(offsets))
 
     imu.sort(key=lambda x: x[0])
+    quats.sort(key=lambda x: x[0])
+
     t = np.asarray(
-        [(int(sensor_us) * 1000 + clock_offset_ns) / 1e9 for sensor_us, _ in imu],
+        [(int(sensor_us) * 1000 + clock_offset_ns) / 1e9 for sensor_us, _, _ in imu],
         dtype=float,
     )
-    omega = np.asarray([value for _, value in imu], dtype=float)
+    omega = np.asarray([value for _, _, value in imu], dtype=float)
 
-    # Small median filter to suppress isolated gyro spikes while preserving
-    # actual turning periods.
-    filtered = np.empty_like(omega)
+    linear_accel = np.full(len(imu), np.nan, dtype=float)
+    if quats:
+        quat_t = np.asarray([item[0] for item in quats], dtype=np.int64)
+        quat_q = [item[1] for item in quats]
+
+        def orientation_at(sensor_us):
+            idx = int(np.searchsorted(quat_t, sensor_us, side="left"))
+            if idx <= 0:
+                return quat_q[0]
+            if idx >= len(quat_t):
+                return quat_q[-1]
+            t0, t1 = int(quat_t[idx - 1]), int(quat_t[idx])
+            if t1 == t0:
+                return quat_q[idx - 1]
+            alpha = (sensor_us - t0) / float(t1 - t0)
+            return _slerp(quat_q[idx - 1], quat_q[idx], alpha)
+
+        for k, (sensor_us, accel_body, _) in enumerate(imu):
+            q_ned = orientation_at(sensor_us)
+            r_ned_body = _quat_to_matrix(q_ned)
+            r_enu_body = C_ENU_NED @ r_ned_body
+            specific_force_enu = r_enu_body @ accel_body
+            a_enu = specific_force_enu + GRAVITY_ENU
+            linear_accel[k] = float(np.linalg.norm(a_enu))
+
+    # Small median filters suppress isolated spikes while preserving motion.
     radius = 2
+    omega_filtered = np.empty_like(omega)
+    accel_filtered = np.full_like(linear_accel, np.nan)
     for k in range(len(omega)):
         lo, hi = max(0, k-radius), min(len(omega), k+radius+1)
-        filtered[k] = np.median(omega[lo:hi])
+        omega_filtered[k] = np.median(omega[lo:hi])
+        finite_accel = linear_accel[lo:hi][np.isfinite(linear_accel[lo:hi])]
+        if len(finite_accel):
+            accel_filtered[k] = np.median(finite_accel)
 
     unique_t, idx = np.unique(t, return_index=True)
     return {
         "t": unique_t,
-        "angular_velocity": filtered[idx],
+        "angular_velocity": omega_filtered[idx],
+        "linear_acceleration": accel_filtered[idx],
         "source": str(path),
         "samples": int(len(unique_t)),
+        "quaternion_samples": int(len(quats)),
+        "linear_acceleration_definition": (
+            "SBG IMU specific force rotated body->NED->ENU with EKF quaternion, "
+            "then gravity compensated; magnitude [m/s²]"
+        ),
     }
-
 
 def resolve_sbg_path(requested, manifest):
     """Resolve explicit SBG path or infer the single .bin beside the RTS file."""
@@ -302,8 +386,16 @@ def analyze_algorithm(ref, est_path, alg, angular=None):
             left=np.nan,
             right=np.nan,
         )
+        gi = np.interp(
+            et,
+            angular["t"],
+            angular.get("linear_acceleration", np.full(len(angular["t"]), np.nan)),
+            left=np.nan,
+            right=np.nan,
+        )
     else:
         gw = np.full(len(et), np.nan, dtype=float)
+        gi = np.full(len(et), np.nan, dtype=float)
 
     aligned, R, trans = rigid_align(ep, gp)
     error = np.linalg.norm(aligned - gp, axis=1)
@@ -398,6 +490,10 @@ def analyze_algorithm(ref, est_path, alg, angular=None):
                     float(np.mean(gw[bm & np.isfinite(gw)]))
                     if np.any(bm & np.isfinite(gw)) else None
                 ),
+                "mean_imu_linear_acceleration_m_s2": (
+                    float(np.mean(gi[bm & np.isfinite(gi)]))
+                    if np.any(bm & np.isfinite(gi)) else None
+                ),
             })
         worst.sort(key=lambda r: r["mean_ate_m"], reverse=True)
 
@@ -409,16 +505,24 @@ def analyze_algorithm(ref, est_path, alg, angular=None):
             float(np.corrcoef(gw[angular_mask], error[angular_mask])[0, 1])
             if np.count_nonzero(angular_mask) >= 3 else None
         )
+        imu_accel_mask = moving_mask & np.isfinite(gi)
+        imu_accel_corr = (
+            float(np.corrcoef(gi[imu_accel_mask], error[imu_accel_mask])[0, 1])
+            if np.count_nonzero(imu_accel_mask) >= 3 else None
+        )
         if not np.isfinite(speed_corr):
             speed_corr = None
         if not np.isfinite(accel_corr):
             accel_corr = None
         if angular_corr is not None and not np.isfinite(angular_corr):
             angular_corr = None
+        if imu_accel_corr is not None and not np.isfinite(imu_accel_corr):
+            imu_accel_corr = None
     else:
         speed_corr = None
         accel_corr = None
         angular_corr = None
+        imu_accel_corr = None
 
     return {
         "id": alg["id"],
@@ -433,6 +537,8 @@ def analyze_algorithm(ref, est_path, alg, angular=None):
         "acceleration_ate_correlation": accel_corr,
         "angular_velocity_ate_correlation": angular_corr,
         "angular_velocity_samples": int(np.count_nonzero(moving_mask & np.isfinite(gw))),
+        "imu_linear_acceleration_ate_correlation": imu_accel_corr,
+        "imu_linear_acceleration_samples": int(np.count_nonzero(moving_mask & np.isfinite(gi))),
         "moving_ate": stats(error[moving_mask]),
         "speed_bins": speed_bins,
         "rpe_5m_bins": rpe_bins,
@@ -445,6 +551,7 @@ def analyze_algorithm(ref, est_path, alg, angular=None):
             "error": error[moving_mask],
             "speed": gs[moving_mask],
             "acceleration": ga[moving_mask],
+            "imu_linear_acceleration": gi[moving_mask],
             "angular_velocity": gw[moving_mask],
         },
     }
@@ -655,7 +762,31 @@ def plot_results(out, analyses):
         fig.savefig(path, dpi=200); plt.close(fig)
         paths["ate_angular_velocity"] = str(path)
 
-    # 5. Which spatial sections are consistently weak?
+    # 5. Is error associated with gravity-compensated SBG linear acceleration?
+    imu_accel_available = any(
+        np.any(np.isfinite(a["_plot"].get("imu_linear_acceleration", np.array([]))))
+        for a in analyses
+    )
+    if imu_accel_available:
+        fig, ax = plt.subplots(figsize=(10, 7))
+        for a in analyses:
+            p = a["_plot"]
+            imu_accel = p.get("imu_linear_acceleration", np.array([]))
+            valid = np.isfinite(imu_accel)
+            if np.any(valid):
+                corr = a.get("imu_linear_acceleration_ate_correlation")
+                _plot_relationship(
+                    ax, imu_accel[valid], p["error"][valid], a["name"], corr
+                )
+        ax.set_xlabel("SBG gravity-compensated linear acceleration [m/s²]")
+        ax.set_ylabel("3D position error [m]")
+        ax.set_title("ATE vs IMU linear acceleration")
+        ax.grid(True); ax.legend(); fig.tight_layout()
+        path = out / "diagnostic_ate_vs_imu_linear_acceleration.png"
+        fig.savefig(path, dpi=200); plt.close(fig)
+        paths["ate_imu_linear_acceleration"] = str(path)
+
+    # 6. Which spatial sections are consistently weak?
     max_dist = max([
         float(np.max(a["_plot"]["distance"])) if len(a["_plot"]["distance"]) else 0.0
         for a in analyses
@@ -693,7 +824,8 @@ def write_csvs(out, analyses):
         w.writerow([
             "Algorithm", "Speed bin", "Poses", "Mean speed [m/s]",
             "Mean ATE [m]", "ATE RMSE [m]", "Median ATE [m]", "Max ATE [m]",
-            "Speed/ATE correlation", "Acceleration/ATE correlation", "Angular velocity/ATE correlation"
+            "Speed/ATE correlation", "RTS acceleration/ATE correlation",
+            "Angular velocity/ATE correlation", "IMU linear acceleration/ATE correlation"
         ])
         for a in analyses:
             for key, label, _, _ in SPEED_BINS:
@@ -702,7 +834,8 @@ def write_csvs(out, analyses):
                     a["name"], label, b["count"], b["mean_speed_m_s"],
                     b["mean"], b["rmse"], b["median"], b["max"],
                     a["speed_ate_correlation"], a["acceleration_ate_correlation"],
-                    a.get("angular_velocity_ate_correlation")
+                    a.get("angular_velocity_ate_correlation"),
+                    a.get("imu_linear_acceleration_ate_correlation")
                 ])
 
     seg_csv = raw / "diagnostic_worst_segments.csv"
@@ -711,14 +844,16 @@ def write_csvs(out, analyses):
         w.writerow([
             "Algorithm", "Rank", "Distance start [m]", "Distance end [m]", "Poses",
             "Mean ATE [m]", "Max ATE [m]", "Mean speed [m/s]",
-            "Mean acceleration [m/s²]", "Mean angular velocity [rad/s]"
+            "Mean RTS acceleration [m/s²]", "Mean angular velocity [rad/s]",
+            "Mean IMU linear acceleration [m/s²]"
         ])
         for a in analyses:
             for rank, s in enumerate(a["worst_segments"], 1):
                 w.writerow([
                     a["name"], rank, s["distance_start_m"], s["distance_end_m"], s["poses"],
                     s["mean_ate_m"], s["max_ate_m"], s["mean_speed_m_s"],
-                    s.get("mean_acceleration_m_s2"), s.get("mean_angular_velocity_rad_s")
+                    s.get("mean_acceleration_m_s2"), s.get("mean_angular_velocity_rad_s"),
+                    s.get("mean_imu_linear_acceleration_m_s2")
                 ])
     return str(motion_csv), str(seg_csv)
 
@@ -836,6 +971,10 @@ def main():
             "alignment": "Rigid SE(3), no scale; RTS position interpolated at estimate timestamps",
             "angular_velocity_source": str(sbg_path) if sbg_path is not None else None,
             "angular_velocity_definition": "SBG body gyro magnitude [rad/s]",
+            "imu_linear_acceleration_definition": (
+                angular.get("linear_acceleration_definition")
+                if angular is not None else None
+            ),
         },
         "best_moving_overall": best_moving,
         "best_by_speed": best_by_speed,

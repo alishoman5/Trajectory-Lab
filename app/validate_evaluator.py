@@ -95,6 +95,16 @@ def write_synthetic_sbg(path):
     chunks.append(_sbg_frame(2, utc_payload(0, 0, 0)))
     chunks.append(_sbg_frame(2, utc_payload(2_000_000, 0, 2)))
 
+    # Identity body->NED quaternion. With body Z pointing down, a stationary
+    # accelerometer reports approximately -g on Z as specific force.
+    for sensor_us in [0, 500_000, 1_000_000, 1_500_000, 2_000_000]:
+        p = bytearray(36)
+        struct.pack_into("<I", p, 0, sensor_us)
+        struct.pack_into("<4f", p, 4, 1.0, 0.0, 0.0, 0.0)
+        struct.pack_into("<3f", p, 20, 0.0, 0.0, 0.0)
+        struct.pack_into("<I", p, 32, 0)
+        chunks.append(_sbg_frame(7, bytes(p)))
+
     for sensor_us, omega in [
         (0, 0.10),
         (500_000, 0.20),
@@ -104,7 +114,7 @@ def write_synthetic_sbg(path):
     ]:
         p = bytearray(58)
         struct.pack_into("<IH", p, 0, sensor_us, 0)
-        struct.pack_into("<3f", p, 6, 0.0, 0.0, 9.81)
+        struct.pack_into("<3f", p, 6, 0.0, 0.0, -9.81)
         struct.pack_into("<3f", p, 18, 0.0, 0.0, omega)
         chunks.append(_sbg_frame(3, bytes(p)))
 
@@ -252,6 +262,7 @@ def main():
         synthetic_angular = {
             "t": t,
             "angular_velocity": 0.15 + 0.08 * np.sin(np.linspace(0.0, 8.0, len(t))),
+            "linear_acceleration": 0.40 + 0.20 * np.sin(np.linspace(0.0, 6.0, len(t))),
         }
         diag = analyze_algorithm(
             ref_diag,
@@ -262,6 +273,7 @@ def main():
         require("speed_ate_correlation" in diag, "speed correlation missing from diagnostics")
         require("acceleration_ate_correlation" in diag, "acceleration correlation missing from diagnostics")
         require("angular_velocity_ate_correlation" in diag, "angular-velocity correlation missing from diagnostics")
+        require("imu_linear_acceleration_ate_correlation" in diag, "IMU-acceleration correlation missing from diagnostics")
         require(
             len(diag["_plot"]["acceleration"]) == diag["moving_poses"],
             "acceleration diagnostic sample count mismatch"
@@ -270,16 +282,23 @@ def main():
             len(diag["_plot"]["angular_velocity"]) == diag["moving_poses"],
             "angular-velocity diagnostic sample count mismatch"
         )
+        require(
+            len(diag["_plot"]["imu_linear_acceleration"]) == diag["moving_poses"],
+            "IMU-acceleration diagnostic sample count mismatch"
+        )
         diag_out = root / "diagnostic_plots"; diag_out.mkdir()
         diag_paths = plot_results(diag_out, [diag])
         require(
-            set(diag_paths) == {"ate_distance", "ate_speed", "ate_acceleration", "ate_angular_velocity", "segment_heatmap"},
+            set(diag_paths) == {
+                "ate_distance", "ate_speed", "ate_acceleration",
+                "ate_imu_linear_acceleration", "ate_angular_velocity", "segment_heatmap"
+            },
             f"unexpected diagnostic plot set: {sorted(diag_paths)}"
         )
         require(all(Path(p).is_file() for p in diag_paths.values()), "one or more diagnostic plots were not written")
         passed(
             "focused motion diagnostics",
-            "distance, speed, acceleration, angular velocity and failure-heatmap outputs generated"
+            "distance, speed, RTS acceleration, IMU acceleration, angular velocity and failure-heatmap outputs generated"
         )
 
         # Validate the pure-Python SBG UTC/gyro parser used by saved-run diagnostics.
@@ -289,7 +308,16 @@ def main():
         require(sbg["samples"] == 5, f"unexpected synthetic SBG sample count: {sbg['samples']}")
         require(np.all(np.isfinite(sbg["angular_velocity"])), "non-finite SBG angular velocity")
         require(float(np.max(sbg["angular_velocity"])) > 0.25, "SBG gyro magnitude was not parsed")
-        passed("SBG angular-velocity parser", "UTC timestamps and body gyro magnitudes decoded")
+        require(sbg.get("quaternion_samples") == 5, "SBG quaternions were not parsed")
+        require(np.all(np.isfinite(sbg["linear_acceleration"])), "non-finite SBG linear acceleration")
+        require(
+            float(np.max(np.abs(sbg["linear_acceleration"]))) < 1e-4,
+            f"stationary gravity compensation failed: {sbg['linear_acceleration']}"
+        )
+        passed(
+            "SBG motion parser",
+            "UTC, gyro and quaternion decoded; stationary gravity-compensated acceleration ≈ 0"
+        )
 
         # Case 3: scale is deliberately NOT estimated. A 2% scale error should remain
         # visible in both global position error and local distance drift.
