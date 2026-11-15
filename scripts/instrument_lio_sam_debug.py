@@ -261,6 +261,63 @@ def patch_image(path: Path):
     print(f"Instrumented: {path}")
 
 
+def patch_preintegration(path: Path):
+    text = path.read_text(encoding="utf-8")
+    marker = "TRAJECTORY_LAB_IMU_TIMESTAMP_GUARD"
+    if marker in text:
+        print(f"Already instrumented: {path}")
+        return
+
+    backup = path.with_suffix(path.suffix + ".trajectory_lab_debug.bak")
+    if not backup.exists():
+        backup.write_text(text, encoding="utf-8")
+
+    text = replace_once(
+        text,
+        '    double lastImuT_imu = -1;\n    double lastImuT_opt = -1;\n',
+        '    double lastImuT_imu = -1;\n'
+        '    double lastImuT_opt = -1;\n'
+        '    double tlLastReceivedImuTime = -1; // TRAJECTORY_LAB_IMU_TIMESTAMP_GUARD\n'
+        '    uint64_t tlDroppedNonMonotonicImu = 0;\n',
+        "preintegration timestamp guard members",
+    )
+
+    old = '''    void imuHandler(const sensor_msgs::Imu::ConstPtr& imu_raw)
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+
+        sensor_msgs::Imu thisImu = imuConverter(*imu_raw);
+
+        imuQueOpt.push_back(thisImu);
+        imuQueImu.push_back(thisImu);
+'''
+    new = '''    void imuHandler(const sensor_msgs::Imu::ConstPtr& imu_raw)
+    {
+        std::lock_guard<std::mutex> lock(mtx);
+
+        sensor_msgs::Imu thisImu = imuConverter(*imu_raw);
+
+        const double tlCurrentImuTime = ROS_TIME(&thisImu);
+        if (tlLastReceivedImuTime >= 0.0 && tlCurrentImuTime <= tlLastReceivedImuTime)
+        {
+            ++tlDroppedNonMonotonicImu;
+            ROS_ERROR("TrajectoryLab: dropping non-monotonic IMU stamp prev=%.9f current=%.9f dt=%.9f dropped=%lu",
+                      tlLastReceivedImuTime,
+                      tlCurrentImuTime,
+                      tlCurrentImuTime - tlLastReceivedImuTime,
+                      (unsigned long)tlDroppedNonMonotonicImu);
+            return;
+        }
+        tlLastReceivedImuTime = tlCurrentImuTime;
+
+        imuQueOpt.push_back(thisImu);
+        imuQueImu.push_back(thisImu);
+'''
+    text = replace_once(text, old, new, "preintegration IMU timestamp guard")
+
+    path.write_text(text, encoding="utf-8")
+    print(f"Instrumented: {path}")
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--lio-sam-dir", default="~/catkin_ws/src/LIO-SAM")
@@ -268,10 +325,12 @@ def main():
     root = Path(args.lio_sam_dir).expanduser().resolve()
     map_src = root / "src" / "mapOptmization.cpp"
     image_src = root / "src" / "imageProjection.cpp"
-    if not map_src.is_file() or not image_src.is_file():
+    preint_src = root / "src" / "imuPreintegration.cpp"
+    if not map_src.is_file() or not image_src.is_file() or not preint_src.is_file():
         raise SystemExit(f"Could not find standard LIO-SAM sources under {root}")
     patch_map(map_src)
     patch_image(image_src)
+    patch_preintegration(preint_src)
     print("\nDone. Rebuild your catkin workspace before the next run.")
     print("Backups use the suffix .trajectory_lab_debug.bak")
 
