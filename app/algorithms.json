@@ -4,7 +4,7 @@
     "name": "LIO-SAM",
     "launch_command": "roslaunch lio_sam run.launch",
     "odom_topic": "/lio_sam/mapping/odometry",
-    "startup_delay": 5.0,
+    "startup_delay": 5,
     "configured": true,
     "description": "ROS1 LIO-SAM profile used by the current project."
   },
@@ -13,18 +13,18 @@
     "name": "FAST-LIO2",
     "launch_command": "roslaunch fast_lio mapping_ouster128_gui.launch rviz:=false",
     "odom_topic": "/Odometry",
-    "startup_delay": 5.0,
+    "startup_delay": 5,
     "configured": true,
     "description": "FAST-LIO2 | Ouster OS1-128 + SBG IMU"
   },
   {
     "id": "kiss_icp",
     "name": "KISS-ICP",
-    "launch_command": "",
+    "launch_command": "roslaunch kiss_icp odometry.launch topic:=/points_raw visualize:=false publish_odom_tf:=false min_range:=1.0 max_range:=100.0 deskew:=false",
     "odom_topic": "/kiss/odometry",
-    "startup_delay": 3.0,
-    "configured": false,
-    "description": "Use a ROS wrapper/profile that publishes nav_msgs/Odometry."
+    "startup_delay": 3,
+    "configured": true,
+    "description": "KISS-ICP ROS1 v0.3.0 | Ouster OS1-128 /points_raw | LiDAR-only odometry"
   },
   {
     "id": "hdl_graph_slam",
@@ -33,7 +33,7 @@
     "odom_topic": "/hdl_graph_slam/optimized_odometry",
     "optimized_topic": "/hdl_graph_slam/optimized_odometry",
     "result_mode": "hdl_graph_dump",
-    "startup_delay": 6.0,
+    "startup_delay": 6,
     "configured": true,
     "description": "hdl_graph_slam | NDT_OMP front-end + NDT_OMP loop closure + LM/CHOLMOD pose-graph optimization; compares FINAL optimized graph poses."
   }
