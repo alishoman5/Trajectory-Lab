@@ -328,6 +328,15 @@ class PipelineWorker(QObject):
                 if not launch_cmd:
                     raise RuntimeError(f"{name} has no launch command. Configure it in Algorithms.")
 
+                # Instrumented LIO-SAM builds use this directory for CSV diagnostics.
+                # Other algorithms simply ignore the environment variable.
+                debug_dir = run_dir / "debug"
+                debug_dir.mkdir(exist_ok=True)
+                launch_cmd = (
+                    f"export TRAJECTORY_LAB_DEBUG_DIR={shlex.quote(str(debug_dir))} && "
+                    + launch_cmd
+                )
+
                 base = 28 + int((idx / max(total, 1)) * 50)
                 self.progress.emit(base, f"Starting {name}")
                 alg_log = run_dir / f"{alg_id}.log"
