@@ -19,6 +19,8 @@ import numpy as np
 try:
     import trajectopy as tpy
     from trajectopy.core.settings import PairDistanceUnit
+    from trajectopy.core.rotations import Rotations
+    from trajectopy.processing.matching import match_trajectories
     from trajectopy.visualization import mpl_plots
 except Exception as exc:
     raise RuntimeError(
@@ -202,15 +204,92 @@ def rpe_numeric_summary(rpe_result):
     return d
 
 
+
+def rigid_kabsch_align(est_traj, ref_traj, processing_settings):
+    """Rigidly align estimate to reference with a closed-form SE(3) Kabsch fit.
+
+    Trajectopy's nonlinear alignment can fail to converge when the initial
+    heading differs by roughly 180 degrees.  For LiDAR SLAM with known scale,
+    the required position alignment has a closed-form global optimum: match
+    poses in time, estimate one proper rotation (det=+1) plus translation,
+    then apply that transform to the complete estimated trajectory.
+    """
+    est_match, ref_match = match_trajectories(
+        trajectory=est_traj,
+        other=ref_traj,
+        matching_settings=processing_settings.matching,
+        inplace=False,
+    )
+
+    if len(est_match) < 3:
+        raise RuntimeError(
+            f"Only {len(est_match)} timestamp matches available for rigid alignment."
+        )
+
+    a = np.asarray(est_match.positions.xyz, dtype=float)
+    b = np.asarray(ref_match.positions.xyz, dtype=float)
+
+    ca = a.mean(axis=0)
+    cb = b.mean(axis=0)
+    ac = a - ca
+    bc = b - cb
+
+    h = ac.T @ bc
+    u, _, vt = np.linalg.svd(h)
+    rotation = vt.T @ u.T
+
+    # SE(3) must contain a proper rotation, never a reflection.
+    if np.linalg.det(rotation) < 0:
+        vt[-1, :] *= -1.0
+        rotation = vt.T @ u.T
+
+    translation = cb - rotation @ ca
+
+    aligned = est_traj.copy()
+    xyz = np.asarray(aligned.positions.xyz, dtype=float)
+    aligned.positions.xyz = (rotation @ xyz.T).T + translation
+
+    if aligned.rotations is not None:
+        mats = np.asarray(aligned.rotations.as_matrix(), dtype=float)
+        mats_aligned = np.einsum("ij,njk->nik", rotation, mats)
+        aligned.rotations = Rotations.from_matrix(mats_aligned)
+
+    fitted = (rotation @ a.T).T + translation
+    residual = np.linalg.norm(fitted - b, axis=1)
+
+    sim3 = np.eye(4, dtype=float)
+    sim3[:3, :3] = rotation
+    sim3[:3, 3] = translation
+
+    diagnostics = {
+        "method": "closed-form Kabsch SE(3)",
+        "matched_samples": int(len(a)),
+        "rotation_det": float(np.linalg.det(rotation)),
+        "translation_m": translation.tolist(),
+        "sim3_matrix": sim3.tolist(),
+        "fit_mean_m": float(np.mean(residual)),
+        "fit_rms_m": float(np.sqrt(np.mean(residual ** 2))),
+        "fit_max_m": float(np.max(residual)),
+    }
+    return aligned, diagnostics
+
+
 def evaluate_one(ref_traj, est_path, name, alg_id, processing_settings, out):
     est_traj = tpy.Trajectory.from_file(str(est_path))
 
+    # Use the global closed-form rigid fit before Trajectopy evaluation.
+    # This avoids the nonlinear optimizer's 180-degree initial-heading failure
+    # while preserving the requested 6-DoF, unit-scale SE(3) policy.
+    est_aligned, kabsch_alignment = rigid_kabsch_align(
+        est_traj, ref_traj, processing_settings
+    )
+
     ate_result, alignment_result = tpy.ate(
-        trajectory=est_traj,
+        trajectory=est_aligned,
         other=ref_traj,
         processing_settings=processing_settings,
         return_alignment=True,
-        align=True,
+        align=False,
     )
 
     if len(ate_result.abs_dev.pos_dev) < 3:
@@ -258,30 +337,33 @@ def evaluate_one(ref_traj, est_path, name, alg_id, processing_settings, out):
         alignment_file.unlink(missing_ok=True)
     except TypeError:
         if alignment_file.exists(): alignment_file.unlink()
-    alignment_result.to_file(str(alignment_file))
+    with alignment_file.open("w", encoding="utf-8") as f:
+        f.write("# alignment_method closed-form Kabsch SE(3)\n")
+        f.write("# scale 1.0\n")
+        for row in np.asarray(kabsch_alignment["sim3_matrix"], dtype=float):
+            f.write(",".join(f"{v:.12g}" for v in row) + "\n")
 
     ate_props = dict(ate_result.property_dict)
     rpe_props = dict(rpe_result.property_dict)
     ate_num = ate_numeric_summary(ate_result)
     rpe_num = rpe_numeric_summary(rpe_result)
 
-    # Preserve the alignment result as well. Trajectopy exposes the complete
-    # enabled/disabled parameter set and covariance through AlignmentParameters.
-    pos_params = alignment_result.position_parameters
-    rot_params = alignment_result.rotation_parameters
+    # Record the actual alignment used for evaluation.  Trajectopy still owns
+    # timestamp matching and ATE/RPE computation; the rigid fit itself is the
+    # deterministic Kabsch SE(3) solution above.
     alignment_props = {
-        "Name": str(alignment_result.name),
-        "Converged": bool(alignment_result.converged),
-        "Position parameters": json_safe(pos_params.to_dict(enabled_only=False)),
-        "Enabled position parameters": list(pos_params.to_string_list(enabled_only=True)),
-        "All position parameters": list(pos_params.to_string_list(enabled_only=False)),
-        "Sim3 matrix": json_safe(pos_params.sim3_matrix),
+        "Name": name,
+        "Converged": True,
+        "Method": kabsch_alignment["method"],
+        "Matched samples": kabsch_alignment["matched_samples"],
+        "Rotation determinant": kabsch_alignment["rotation_det"],
+        "Translation [m]": kabsch_alignment["translation_m"],
+        "Sim3 matrix": kabsch_alignment["sim3_matrix"],
+        "Kabsch fit mean [m]": kabsch_alignment["fit_mean_m"],
+        "Kabsch fit RMS [m]": kabsch_alignment["fit_rms_m"],
+        "Kabsch fit max [m]": kabsch_alignment["fit_max_m"],
+        "Sensor rotation parameters": {},
     }
-    try:
-        alignment_props["Sensor rotation parameters"] = json_safe(rot_params.to_dict(enabled_only=False))
-        alignment_props["All sensor rotation parameters"] = list(rot_params.to_string_list(enabled_only=False))
-    except Exception:
-        alignment_props["Sensor rotation parameters"] = {}
 
     alignment_json = out / f"{alg_id}_trajectopy_alignment.json"
     alignment_json.write_text(json.dumps(json_safe(alignment_props), indent=2), encoding="utf-8")
@@ -314,7 +396,7 @@ def evaluate_one(ref_traj, est_path, name, alg_id, processing_settings, out):
         "trajectopy_version": safe_version(),
         "matching_method": "NEAREST_TEMPORAL",
         "max_time_diff_s": float(processing_settings.matching.max_time_diff),
-        "alignment": "6DoF translation+rotation; scale=false; time_shift=false",
+        "alignment": "closed-form Kabsch SE(3): 6DoF translation+rotation; scale=false; time_shift=false",
         "matched_samples": int(len(ate_result.abs_dev.pos_dev)),
         "ate": ate_num,
         "rpe": rpe_num,
@@ -616,7 +698,7 @@ def main():
         "reference_path_length_m": ref_length,
         "matching_method": "NEAREST_TEMPORAL",
         "max_time_diff_s": args.max_dt,
-        "alignment": "rigid 6DoF translation+rotation; scale=false; time_shift=false",
+        "alignment": "closed-form Kabsch SE(3): rigid 6DoF translation+rotation; scale=false; time_shift=false",
         "rpe": {
             "pair_distance_unit": "METER",
             "requested_min_m": args.rpe_min,
@@ -655,7 +737,7 @@ def main():
         results.append(metrics)
         ate_results.append(ate_result)
         rpe_results.append(rpe_result)
-        alignment_results.append(alignment_result)
+        # Kabsch alignment is deterministic and has no Trajectopy covariance object.
 
     # Native Trajectopy position ATE is the primary rank metric.
     results.sort(key=lambda x: x["ate_mean_m"])
@@ -680,7 +762,7 @@ def main():
         f.write(f"Reference: {reference_label} ({reference_source})\n")
         f.write("Matching: NEAREST_TEMPORAL\n")
         f.write(f"Max time difference: {args.max_dt:.6f} s\n")
-        f.write("Alignment: translation + rotation (6 DoF), scale disabled, time-shift disabled\n")
+        f.write("Alignment: closed-form Kabsch SE(3), translation + rotation (6 DoF), scale disabled, time-shift disabled\n")
         f.write(f"RPE distance buckets: {rpe_min:.3f} .. {rpe_max:.3f} m, step {rpe_step:.3f} m\n")
         f.write("RPE position unit: % (metres drift per 100 m)\n")
         f.write("RPE rotation unit: deg/100m when reference orientation exists\n\n")
