@@ -163,7 +163,7 @@ def patch_map(path: Path):
                        << cloudKeyPoses3D->size() << ","
                        << transformTobeMapped[3] << "," << transformTobeMapped[4] << "," << transformTobeMapped[5] << ","
                        << transformTobeMapped[0] << "," << transformTobeMapped[1] << "," << transformTobeMapped[2] << ","
-                       << (cloudInfo.imuAvailable ? 1 : 0) << "," << (cloudInfo.odomAvailable ? 1 : 0) << "\\n";
+                       << (cloudInfo.imuAvailable ? 1 : 0) << "," << (cloudInfo.odomAvailable ? 1 : 0) << "\n";
             tlMapDebug.flush();
         }
 '''
