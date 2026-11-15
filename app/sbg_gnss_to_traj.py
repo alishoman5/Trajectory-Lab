@@ -28,10 +28,27 @@ import numpy as np
 SYNC1 = 0xFF
 SYNC2 = 0x5A
 ETX = 0x33
+UINT32_MOD = 1 << 32
 
 WGS84_A = 6378137.0
 WGS84_F = 1.0 / 298.257223563
 WGS84_E2 = WGS84_F * (2.0 - WGS84_F)
+
+
+class SensorTimeUnwrapper:
+    """Unwrap SBG's uint32 microsecond clock while preserving file order."""
+
+    def __init__(self):
+        self.wraps = 0
+        self.last_raw = None
+
+    def unwrap(self, raw_us):
+        raw_us = int(raw_us)
+        if self.last_raw is not None:
+            if raw_us < self.last_raw and (self.last_raw - raw_us) > (UINT32_MOD // 2):
+                self.wraps += 1
+        self.last_raw = raw_us
+        return raw_us + self.wraps * UINT32_MOD
 
 
 def _iter_frames(data):
@@ -154,13 +171,18 @@ def parse_sbg_reference(path, prefer_raw_gnss=True):
     gps_pos = []
     gps_vel = []
     ekf_nav = []
+    time_unwrapper = SensorTimeUnwrapper()
 
     for msg_id, msg_class, payload in _iter_frames(data):
         if msg_class != 0:
             continue
+        if msg_id not in (2, 8, 13, 14) or len(payload) < 4:
+            continue
+        raw_sensor_us = struct.unpack_from("<I", payload, 0)[0]
+        sensor_us_unwrapped = time_unwrapper.unwrap(raw_sensor_us)
 
         if msg_id == 2 and len(payload) == 21:
-            sensor_us = struct.unpack_from("<I", payload, 0)[0]
+            sensor_us = sensor_us_unwrapped
             year = struct.unpack_from("<H", payload, 6)[0]
             month, day, hour, minute, second = struct.unpack_from("<5B", payload, 8)
             nanosecond = struct.unpack_from("<I", payload, 13)[0]
@@ -172,7 +194,8 @@ def parse_sbg_reference(path, prefer_raw_gnss=True):
                     pass
 
         elif msg_id == 14 and len(payload) >= 52:
-            sensor_us, status = struct.unpack_from("<II", payload, 0)
+            _, status = struct.unpack_from("<II", payload, 0)
+            sensor_us = sensor_us_unwrapped
             status_code = status & 0x3F
             solution_type = (status >> 6) & 0x3F
             lat = struct.unpack_from("<d", payload, 12)[0]
@@ -195,7 +218,8 @@ def parse_sbg_reference(path, prefer_raw_gnss=True):
                 })
 
         elif msg_id == 13 and len(payload) >= 44:
-            sensor_us, status = struct.unpack_from("<II", payload, 0)
+            _, status = struct.unpack_from("<II", payload, 0)
+            sensor_us = sensor_us_unwrapped
             status_code = status & 0x3F
             solution_type = (status >> 6) & 0x3F
             vn, ve, vd = struct.unpack_from("<3f", payload, 12)
@@ -203,7 +227,7 @@ def parse_sbg_reference(path, prefer_raw_gnss=True):
                 gps_vel.append((sensor_us, np.array([ve, vn, -vd], dtype=float)))
 
         elif msg_id == 8 and len(payload) >= 72:
-            sensor_us = struct.unpack_from("<I", payload, 0)[0]
+            sensor_us = sensor_us_unwrapped
             vn, ve, vd = struct.unpack_from("<3f", payload, 4)
             lat = struct.unpack_from("<d", payload, 28)[0]
             lon = struct.unpack_from("<d", payload, 36)[0]
@@ -228,7 +252,7 @@ def parse_sbg_reference(path, prefer_raw_gnss=True):
 
     use_raw = prefer_raw_gnss and len(gps_pos) >= 3
     if use_raw:
-        rows = sorted(gps_pos, key=lambda r: r["sensor_us"])
+        rows = list(gps_pos)
         source = "SBG GPS1 raw GNSS"
         t = np.asarray([_sensor_us_to_unix(r["sensor_us"], offset_ns) for r in rows], dtype=float)
         lat = np.asarray([r["lat"] for r in rows], dtype=float)
@@ -242,7 +266,7 @@ def parse_sbg_reference(path, prefer_raw_gnss=True):
         ]
         vel = _interp_velocity(t, vel_rows)
     elif len(ekf_nav) >= 3:
-        rows = sorted(ekf_nav, key=lambda r: r["sensor_us"])
+        rows = list(ekf_nav)
         source = "SBG GNSS/INS EKF_NAV"
         t = np.asarray([_sensor_us_to_unix(r["sensor_us"], offset_ns) for r in rows], dtype=float)
         lat = np.asarray([r["lat"] for r in rows], dtype=float)
@@ -256,15 +280,14 @@ def parse_sbg_reference(path, prefer_raw_gnss=True):
             "messages plus UTC (ID 2) in the SBG binary log."
         )
 
-    order = np.argsort(t)
-    t, lat, lon, h, acc = t[order], lat[order], lon[order], h[order], acc[order]
+    # Preserve acquisition order after uint32 unwrapping. Remove only duplicate
+    # or backwards timestamps; never reorder the physical trajectory.
+    keep = np.ones(len(t), dtype=bool)
+    if len(t) > 1:
+        keep[1:] = np.diff(t) > 0.0
+    t, lat, lon, h, acc = t[keep], lat[keep], lon[keep], h[keep], acc[keep]
     if vel is not None:
-        vel = vel[order]
-
-    unique, idx = np.unique(t, return_index=True)
-    t, lat, lon, h, acc = unique, lat[idx], lon[idx], h[idx], acc[idx]
-    if vel is not None:
-        vel = vel[idx]
+        vel = vel[keep]
 
     ecef = _geodetic_to_ecef(lat, lon, h)
     pos = _ecef_to_local_enu(ecef, lat[0], lon[0], ecef[0])
@@ -290,6 +313,7 @@ def parse_sbg_reference(path, prefer_raw_gnss=True):
             "vertical_median": float(np.nanmedian(acc[:, 2])),
             "vertical_max": float(np.nanmax(acc[:, 2])),
         },
+        "sensor_clock_wraps": int(time_unwrapper.wraps),
         "note": (
             "GNSS/INS fallback reference is not equivalent to RTS ground truth. "
             "Interpret ATE/RPE relative to this reference accuracy."
