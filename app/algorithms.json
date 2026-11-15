@@ -20,11 +20,11 @@
   {
     "id": "kiss_icp",
     "name": "KISS-ICP",
-    "launch_command": "roslaunch kiss_icp odometry.launch topic:=/points_raw visualize:=false publish_odom_tf:=false min_range:=1.0 max_range:=100.0 deskew:=false",
+    "launch_command": "roslaunch kiss_icp odometry.launch topic:=/points_raw visualize:=false publish_odom_tf:=false",
     "odom_topic": "/kiss/odometry",
     "startup_delay": 3,
     "configured": true,
-    "description": "KISS-ICP ROS1 v0.3.0 | Ouster OS1-128 /points_raw | LiDAR-only odometry"
+    "description": "KISS-ICP ROS1 v0.3.0 | Ouster OS1-128 /points_raw | official default KISS-ICP parameters"
   },
   {
     "id": "hdl_graph_slam",
