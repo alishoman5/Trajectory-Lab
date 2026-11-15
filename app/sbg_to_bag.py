@@ -49,6 +49,7 @@ DEFAULT_OUT = "rotation_imu.bag"
 SYNC1 = 0xFF
 SYNC2 = 0x5A
 ETX = 0x33
+UINT32_MOD = 1 << 32
 
 # Navigation/world frame conversion:
 # NED vector [N,E,D] -> ENU [E,N,U]
@@ -87,6 +88,28 @@ def parse_frames(path):
         yield msg_class, msg_id, payload
 
         i += frame_size
+
+
+class SensorTimeUnwrapper:
+    """Unwrap SBG's uint32 microsecond clock while preserving file order."""
+
+    def __init__(self):
+        self.wraps = 0
+        self.last_raw = None
+
+    def unwrap(self, raw_us):
+        raw_us = int(raw_us)
+        if self.last_raw is not None:
+            # A very large backward jump is the normal uint32 rollover.
+            if raw_us < self.last_raw and (self.last_raw - raw_us) > (UINT32_MOD // 2):
+                self.wraps += 1
+        self.last_raw = raw_us
+        return raw_us + self.wraps * UINT32_MOD
+
+
+def replace_sensor_time(record, unwrapped_us):
+    """Replace tuple element 0 (sensor time) without changing the payload fields."""
+    return (int(unwrapped_us),) + tuple(record[1:])
 
 
 def parse_utc(payload):
@@ -244,6 +267,7 @@ def main():
     utc = []
     imu = []
     quats = []
+    time_unwrapper = SensorTimeUnwrapper()
 
     print("Parsing SBG log...")
 
@@ -251,18 +275,26 @@ def main():
         if msg_class != 0:
             continue
 
+        # All three logs used here start with the same uint32 sensor timestamp.
+        # Unwrap it in FILE ORDER before splitting into individual streams.
+        if msg_id not in (2, 3, 7) or len(payload) < 4:
+            continue
+        raw_sensor_us = struct.unpack_from("<I", payload, 0)[0]
+        sensor_us = time_unwrapper.unwrap(raw_sensor_us)
+
         if msg_id == 2 and len(payload) == 21:
             parsed = parse_utc(payload)
             if parsed is not None:
-                utc.append(parsed)
+                utc.append(replace_sensor_time(parsed, sensor_us))
 
         elif msg_id == 3 and len(payload) == 58:
-            imu.append(parse_imu(payload))
+            parsed = parse_imu(payload)
+            imu.append(replace_sensor_time(parsed, sensor_us))
 
         elif msg_id == 7 and len(payload) >= 36:
             parsed = parse_quat(payload)
             if parsed is not None:
-                sensor_us, q, std_rpy, status = parsed
+                _, q, std_rpy, status = parsed
                 quats.append(
                     (sensor_us, ned_to_enu_quat(q), std_rpy, status)
                 )
@@ -270,13 +302,13 @@ def main():
     print(f"UTC anchors : {len(utc)}")
     print(f"IMU samples : {len(imu)}")
     print(f"Quaternions : {len(quats)}")
+    print(f"Clock wraps : {time_unwrapper.wraps}")
 
     if not utc or not imu or not quats:
         raise RuntimeError("Missing UTC, IMU, or quaternion data.")
 
-    utc.sort(key=lambda x: x[0])
-    imu.sort(key=lambda x: x[0])
-    quats.sort(key=lambda x: x[0])
+    # Keep acquisition order. Sorting the raw uint32 timestamp can reorder data
+    # around a rollover and can hide the real source ordering.
 
     # Robust clock relation:
     # epoch_ns = sensor_us*1000 + constant_offset_ns
@@ -337,10 +369,22 @@ def main():
     first_epoch_ns = None
     last_epoch_ns = None
     written = 0
+    dropped_nonmonotonic = 0
+    first_bad_samples = []
 
     try:
-        for sensor_us, imu_status, accel, gyro in imu:
+        for sample_index, (sensor_us, imu_status, accel, gyro) in enumerate(imu):
             epoch_ns = sensor_to_epoch_ns(sensor_us)
+
+            # GTSAM PreintegratedImuMeasurements requires strictly positive dt.
+            # Never publish duplicate or backwards IMU header timestamps.
+            if last_epoch_ns is not None and epoch_ns <= last_epoch_ns:
+                dropped_nonmonotonic += 1
+                if len(first_bad_samples) < 10:
+                    first_bad_samples.append(
+                        (sample_index, last_epoch_ns, epoch_ns, epoch_ns - last_epoch_ns)
+                    )
+                continue
             q, std_rpy = interp_orientation(sensor_us)
             qw, qx, qy, qz = q
 
@@ -389,10 +433,19 @@ def main():
     sensor_times = np.array([x[0] for x in imu], dtype=np.int64)
     dts_us = np.diff(sensor_times)
     positive_dts = dts_us[dts_us > 0]
+    nonpositive_dts = dts_us[dts_us <= 0]
 
     print()
     print("Done.")
     print(f"IMU written    : {written}")
+    print(f"Dropped dt<=0  : {dropped_nonmonotonic}")
+    if first_bad_samples:
+        print("First rejected IMU timestamps:")
+        for idx, prev_ns, cur_ns, dt_ns in first_bad_samples:
+            print(
+                f"  index={idx} prev={prev_ns / 1e9:.9f} "
+                f"current={cur_ns / 1e9:.9f} dt={dt_ns / 1e9:.9f} s"
+            )
     print(f"Start          : {first_epoch_ns / 1e9:.9f}")
     print(f"End            : {last_epoch_ns / 1e9:.9f}")
     print(f"Duration       : {imu_duration:.9f} s")
@@ -401,6 +454,7 @@ def main():
         print(f"Median dt      : {med_dt:.1f} us")
         print(f"Nominal rate   : {1e6 / med_dt:.3f} Hz")
         print(f"Max dt         : {float(np.max(positive_dts)) / 1000.0:.3f} ms")
+    print(f"Raw dt<=0 pairs: {int(nonpositive_dts.size)}")
     print(f"Output         : {out_path}")
 
     if args.append_to:
