@@ -8,6 +8,7 @@ writes runtime diagnostics to $TRAJECTORY_LAB_DEBUG_DIR (or
 """
 
 import argparse
+import re
 from pathlib import Path
 
 MARKER = "TRAJECTORY_LAB_DEBUG_INSTRUMENTED"
@@ -17,6 +18,33 @@ def replace_once(text, old, new, label):
     if old not in text:
         raise RuntimeError(f"Could not find expected source block for: {label}. Local LIO-SAM source may differ from upstream.")
     return text.replace(old, new, 1)
+
+
+def function_span(text, signature):
+    """Return [start,end) for a C++ function using brace matching."""
+    start = text.find(signature)
+    if start < 0:
+        raise RuntimeError(f"Could not find function signature: {signature}")
+    brace = text.find("{", start)
+    if brace < 0:
+        raise RuntimeError(f"Could not find opening brace for: {signature}")
+    depth = 0
+    for idx in range(brace, len(text)):
+        ch = text[idx]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return start, idx + 1
+    raise RuntimeError(f"Could not find closing brace for: {signature}")
+
+
+def replace_regex_once(text, pattern, replacement, label, flags=0):
+    new, count = re.subn(pattern, replacement, text, count=1, flags=flags)
+    if count != 1:
+        raise RuntimeError(f"Could not find expected source pattern for: {label}")
+    return new
 
 
 def patch_map(path: Path):
@@ -68,21 +96,91 @@ def patch_map(path: Path):
         "map constructor debug open",
     )
 
-    old_scan = '''    void scan2MapOptimization()\n    {\n        if (cloudKeyPoses3D->points.empty())\n            return;\n        if (laserCloudCornerLastDSNum > edgeFeatureMinValidNum && laserCloudSurfLastDSNum > surfFeatureMinValidNum)\n        {\n            kdtreeCornerFromMap->setInputCloud(laserCloudCornerFromMapDS);\n            kdtreeSurfFromMap->setInputCloud(laserCloudSurfFromMapDS);\n\n            for (int iterCount = 0; iterCount < 30; iterCount++)\n            {\n                laserCloudOri->clear();\n                coeffSel->clear();\n\n                cornerOptimization();\n                surfOptimization();\n                combineOptimizationCoeffs();\n\n                if (LMOptimization(iterCount) == true)\n                    break;\n            }\n\n            transformUpdate();\n        } else {\n            ROS_WARN("Not enough features! Only %d edge and %d planar features available.", laserCloudCornerLastDSNum, laserCloudSurfLastDSNum);\n        }\n    }\n'''
-    new_scan = '''    void scan2MapOptimization()\n    {\n        if (cloudKeyPoses3D->points.empty())\n            return;\n\n        bool tlLmConverged = false;\n        int tlIterations = 0;\n        int tlCornerCorr = 0;\n        int tlSurfCorr = 0;\n        int tlTotalCorr = 0;\n\n        if (laserCloudCornerLastDSNum > edgeFeatureMinValidNum && laserCloudSurfLastDSNum > surfFeatureMinValidNum)\n        {\n            kdtreeCornerFromMap->setInputCloud(laserCloudCornerFromMapDS);\n            kdtreeSurfFromMap->setInputCloud(laserCloudSurfFromMapDS);\n\n            for (int iterCount = 0; iterCount < 30; iterCount++)\n            {\n                laserCloudOri->clear();\n                coeffSel->clear();\n\n                cornerOptimization();\n                surfOptimization();\n\n                tlCornerCorr = 0;\n                for (int i = 0; i < laserCloudCornerLastDSNum; ++i)\n                    if (laserCloudOriCornerFlag[i]) ++tlCornerCorr;\n                tlSurfCorr = 0;\n                for (int i = 0; i < laserCloudSurfLastDSNum; ++i)\n                    if (laserCloudOriSurfFlag[i]) ++tlSurfCorr;\n\n                combineOptimizationCoeffs();\n                tlTotalCorr = (int)laserCloudOri->size();\n                tlIterations = iterCount + 1;\n\n                if (LMOptimization(iterCount) == true)\n                {\n                    tlLmConverged = true;\n                    break;\n                }\n            }\n\n            transformUpdate();\n        } else {\n            ROS_WARN("Not enough features! Only %d edge and %d planar features available.", laserCloudCornerLastDSNum, laserCloudSurfLastDSNum);\n        }\n\n        if (tlMapDebug.is_open())\n        {\n            tlMapDebug << timeLaserInfoCur << ","\n                       << laserCloudCornerLastDSNum << "," << laserCloudSurfLastDSNum << ","\n                       << laserCloudCornerFromMapDSNum << "," << laserCloudSurfFromMapDSNum << ","\n                       << tlCornerCorr << "," << tlSurfCorr << "," << tlTotalCorr << ","\n                       << (isDegenerate ? 1 : 0) << "," << (tlLmConverged ? 1 : 0) << "," << tlIterations << ","\n                       << cloudKeyPoses3D->size() << ","\n                       << transformTobeMapped[3] << "," << transformTobeMapped[4] << "," << transformTobeMapped[5] << ","\n                       << transformTobeMapped[0] << "," << transformTobeMapped[1] << "," << transformTobeMapped[2] << ","\n                       << (cloudInfo.imuAvailable ? 1 : 0) << "," << (cloudInfo.odomAvailable ? 1 : 0) << "\\n";\n            tlMapDebug.flush();\n        }\n    }\n'''
-    text = replace_once(text, old_scan, new_scan, "scan2MapOptimization instrumentation")
+    # Patch scan2MapOptimization structurally so minor whitespace/local edits do
+    # not break the instrumentation.
+    fn_start, fn_end = function_span(text, "void scan2MapOptimization()")
+    fn = text[fn_start:fn_end]
 
-    text = replace_once(
+    fn = replace_regex_once(
+        fn,
+        r'(if\s*\(cloudKeyPoses3D->points\.empty\(\)\)\s*return\s*;)',
+        r'''\1
+
+        bool tlLmConverged = false;
+        int tlIterations = 0;
+        int tlCornerCorr = 0;
+        int tlSurfCorr = 0;
+        int tlTotalCorr = 0;''',
+        "scan debug state",
+        flags=re.S,
+    )
+
+    fn = replace_regex_once(
+        fn,
+        r'(cornerOptimization\s*\(\s*\)\s*;\s*surfOptimization\s*\(\s*\)\s*;)',
+        r'''\1
+
+                tlCornerCorr = 0;
+                for (int i = 0; i < laserCloudCornerLastDSNum; ++i)
+                    if (laserCloudOriCornerFlag[i]) ++tlCornerCorr;
+                tlSurfCorr = 0;
+                for (int i = 0; i < laserCloudSurfLastDSNum; ++i)
+                    if (laserCloudOriSurfFlag[i]) ++tlSurfCorr;''',
+        "correspondence counters",
+        flags=re.S,
+    )
+
+    fn = replace_regex_once(
+        fn,
+        r'(combineOptimizationCoeffs\s*\(\s*\)\s*;)',
+        r'''\1
+                tlTotalCorr = (int)laserCloudOri->size();
+                tlIterations = iterCount + 1;''',
+        "optimization iteration counters",
+    )
+
+    fn = replace_regex_once(
+        fn,
+        r'if\s*\(\s*LMOptimization\s*\(\s*iterCount\s*\)\s*==\s*true\s*\)\s*break\s*;',
+        r'''if (LMOptimization(iterCount) == true)
+                {
+                    tlLmConverged = true;
+                    break;
+                }''',
+        "LM convergence flag",
+        flags=re.S,
+    )
+
+    debug_tail = r'''
+
+        if (tlMapDebug.is_open())
+        {
+            tlMapDebug << timeLaserInfoCur << ","
+                       << laserCloudCornerLastDSNum << "," << laserCloudSurfLastDSNum << ","
+                       << laserCloudCornerFromMapDSNum << "," << laserCloudSurfFromMapDSNum << ","
+                       << tlCornerCorr << "," << tlSurfCorr << "," << tlTotalCorr << ","
+                       << (isDegenerate ? 1 : 0) << "," << (tlLmConverged ? 1 : 0) << "," << tlIterations << ","
+                       << cloudKeyPoses3D->size() << ","
+                       << transformTobeMapped[3] << "," << transformTobeMapped[4] << "," << transformTobeMapped[5] << ","
+                       << transformTobeMapped[0] << "," << transformTobeMapped[1] << "," << transformTobeMapped[2] << ","
+                       << (cloudInfo.imuAvailable ? 1 : 0) << "," << (cloudInfo.odomAvailable ? 1 : 0) << "\\n";
+            tlMapDebug.flush();
+        }
+'''
+    fn = fn[:-1] + debug_tail + "    }"
+    text = text[:fn_start] + fn + text[fn_end:]
+
+
+    text = replace_regex_once(
         text,
-        '        float noiseScore = icp.getFitnessScore();\n        Vector6 << noiseScore, noiseScore, noiseScore, noiseScore, noiseScore, noiseScore;\n',
-        '        float noiseScore = icp.getFitnessScore();\n'
-        '        if (tlLoopDebug.is_open())\n'
-        '        {\n'
-        '            tlLoopDebug << timeLaserInfoCur << "," << loopKeyCur << "," << loopKeyPre << ","\n'
-        '                        << noiseScore << "," << cureKeyframeCloud->size() << "," << prevKeyframeCloud->size() << "\\n";\n'
-        '            tlLoopDebug.flush();\n'
-        '        }\n'
-        '        Vector6 << noiseScore, noiseScore, noiseScore, noiseScore, noiseScore, noiseScore;\n',
+        r'(float\s+noiseScore\s*=\s*icp\.getFitnessScore\s*\(\s*\)\s*;)',
+        r'''\1
+        if (tlLoopDebug.is_open())
+        {
+            tlLoopDebug << timeLaserInfoCur << "," << loopKeyCur << "," << loopKeyPre << ","
+                        << noiseScore << "," << cureKeyframeCloud->size() << "," << prevKeyframeCloud->size() << "\\n";
+            tlLoopDebug.flush();
+        }''',
         "loop acceptance instrumentation",
     )
 
@@ -132,9 +230,33 @@ def patch_image(path: Path):
         "image constructor debug open",
     )
 
-    old = '''        if (!deskewInfo())\n            return;\n\n        projectPointCloud();\n'''
-    new = '''        bool tlDeskewReady = deskewInfo();\n        if (tlDeskewDebug.is_open())\n        {\n            bool tlImuCovers = !imuQueue.empty() &&\n                imuQueue.front().header.stamp.toSec() <= timeScanCur &&\n                imuQueue.back().header.stamp.toSec() >= timeScanEnd;\n            double tlImuFirst = imuQueue.empty() ? -1.0 : imuQueue.front().header.stamp.toSec();\n            double tlImuLast  = imuQueue.empty() ? -1.0 : imuQueue.back().header.stamp.toSec();\n            tlDeskewDebug << timeScanCur << "," << timeScanEnd << "," << (timeScanEnd - timeScanCur) << ","\n                          << laserCloudIn->size() << "," << imuQueue.size() << "," << tlImuFirst << "," << tlImuLast << ","\n                          << (tlImuCovers ? 1 : 0) << "," << (tlDeskewReady ? 1 : 0) << ","\n                          << (cloudInfo.imuAvailable ? 1 : 0) << "," << (cloudInfo.odomAvailable ? 1 : 0) << ","\n                          << deskewFlag << "," << (imuPointerCur >= 0 ? imuPointerCur + 1 : 0) << ","\n                          << (odomDeskewFlag ? 1 : 0) << "\\n";\n            tlDeskewDebug.flush();\n        }\n        if (!tlDeskewReady)\n            return;\n\n        projectPointCloud();\n'''
-    text = replace_once(text, old, new, "deskew runtime instrumentation")
+    deskew_replacement = r'''bool tlDeskewReady = deskewInfo();
+        if (tlDeskewDebug.is_open())
+        {
+            bool tlImuCovers = !imuQueue.empty() &&
+                imuQueue.front().header.stamp.toSec() <= timeScanCur &&
+                imuQueue.back().header.stamp.toSec() >= timeScanEnd;
+            double tlImuFirst = imuQueue.empty() ? -1.0 : imuQueue.front().header.stamp.toSec();
+            double tlImuLast  = imuQueue.empty() ? -1.0 : imuQueue.back().header.stamp.toSec();
+            tlDeskewDebug << timeScanCur << "," << timeScanEnd << "," << (timeScanEnd - timeScanCur) << ","
+                          << laserCloudIn->size() << "," << imuQueue.size() << "," << tlImuFirst << "," << tlImuLast << ","
+                          << (tlImuCovers ? 1 : 0) << "," << (tlDeskewReady ? 1 : 0) << ","
+                          << (cloudInfo.imuAvailable ? 1 : 0) << "," << (cloudInfo.odomAvailable ? 1 : 0) << ","
+                          << deskewFlag << "," << (imuPointerCur >= 0 ? imuPointerCur + 1 : 0) << ","
+                          << (odomDeskewFlag ? 1 : 0) << "\\n";
+            tlDeskewDebug.flush();
+        }
+        if (!tlDeskewReady)
+            return;
+
+        projectPointCloud();'''
+    text = replace_regex_once(
+        text,
+        r'if\s*\(\s*!deskewInfo\s*\(\s*\)\s*\)\s*return\s*;\s*projectPointCloud\s*\(\s*\)\s*;',
+        deskew_replacement,
+        "deskew runtime instrumentation",
+        flags=re.S,
+    )
     path.write_text(text, encoding="utf-8")
     print(f"Instrumented: {path}")
 
