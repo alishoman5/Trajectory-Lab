@@ -212,6 +212,7 @@ class PipelineWorker(QObject):
             cache_dir = root_out / "_cache"
             cache_dir.mkdir(exist_ok=True)
             sensor_bag = cache_dir / f"{dataset_name}_sensor.bag"
+            sensor_bag_meta = cache_dir / f"{dataset_name}_sensor.meta.json"
 
             self.progress.emit(3, "Validating dataset")
             for key in ("pcap", "metadata", "sbg"):
@@ -276,11 +277,33 @@ class PipelineWorker(QObject):
                 "algorithms": [a.get("name", a.get("id", "")) for a in self.algorithms],
             }, indent=2), encoding="utf-8")
 
+            # Reuse a converted sensor bag only when it was produced from the
+            # exact same input files.  Dataset name alone is not a safe cache key.
+            input_fingerprint = {}
+            for key in ("pcap", "metadata", "sbg"):
+                p = Path(os.path.expanduser(self.dataset[key])).resolve()
+                st = p.stat()
+                input_fingerprint[key] = {
+                    "path": str(p),
+                    "size": int(st.st_size),
+                    "mtime_ns": int(st.st_mtime_ns),
+                }
+
             reuse = bool(self.options.get("reuse_sensor_bag", True))
-            if reuse and sensor_bag.exists():
+            cache_valid = False
+            if reuse and sensor_bag.exists() and sensor_bag_meta.exists():
+                try:
+                    cached = json.loads(sensor_bag_meta.read_text(encoding="utf-8"))
+                    cache_valid = cached.get("inputs") == input_fingerprint
+                except Exception:
+                    cache_valid = False
+
+            if cache_valid:
                 self.progress.emit(10, "Reusing synchronized sensor bag")
-                self._emit(f"Reusing cached sensor bag: {sensor_bag}")
+                self._emit(f"Reusing validated cached sensor bag: {sensor_bag}")
             else:
+                if reuse and sensor_bag.exists():
+                    self._emit("Cached sensor bag does not match current input files; rebuilding it.")
                 self.progress.emit(8, "Converting Ouster LiDAR")
                 lidar = self.project_dir / "ouster_to_bag.py"
                 cmd = (
@@ -299,6 +322,10 @@ class PipelineWorker(QObject):
                     f"--append-to {shlex.quote(str(sensor_bag))}"
                 )
                 self._run(cmd, run_dir)
+                sensor_bag_meta.write_text(
+                    json.dumps({"inputs": input_fingerprint}, indent=2),
+                    encoding="utf-8",
+                )
 
             self.progress.emit(25, "Preparing ROS")
             started_roscore = self._ensure_roscore(run_dir)
