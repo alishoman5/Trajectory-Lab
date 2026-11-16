@@ -78,6 +78,86 @@ class PipelineWorker(QObject):
         return "\n".join(lines)
 
 
+    def _run_plain(self, command, cwd=None, stream=True):
+        """Run a command without sourcing ROS. Used by direct Python algorithms."""
+        if self.stop_requested:
+            raise RuntimeError("Run stopped by user.")
+        self._emit("$ " + command)
+        p = subprocess.Popen(
+            ["bash", "-lc", command],
+            cwd=str(cwd) if cwd else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+            preexec_fn=os.setsid,
+        )
+        self.processes.append(p)
+        lines = []
+        try:
+            for line in p.stdout:
+                s = line.rstrip()
+                lines.append(s)
+                if stream and s:
+                    self.log.emit(s)
+                if self.stop_requested:
+                    self._terminate(p)
+                    raise RuntimeError("Run stopped by user.")
+            rc = p.wait()
+        finally:
+            if p in self.processes:
+                self.processes.remove(p)
+        if rc != 0:
+            tail = "\n".join(lines[-30:])
+            raise RuntimeError(f"Command failed ({rc}): {command}\n{tail}")
+        return "\n".join(lines)
+
+
+    def _find_kiss_python(self):
+        candidates = []
+        env_python = os.environ.get("KISS_ICP_PYTHON", "").strip()
+        if env_python:
+            candidates.append(os.path.expanduser(env_python))
+        candidates.append(os.path.expanduser("~/.venvs/trajectory_lab_kiss_icp/bin/python"))
+
+        checked = []
+        test_code = (
+            "import kiss_icp; "
+            "from kiss_icp.config import load_config; "
+            "from kiss_icp.datasets.ouster import OusterDataloader; "
+            "from ouster.sdk import open_source; "
+            "print(getattr(kiss_icp,'__version__','unknown'))"
+        )
+        for candidate in candidates:
+            if not candidate or candidate in checked:
+                continue
+            checked.append(candidate)
+            if not (os.path.isfile(candidate) and os.access(candidate, os.X_OK)):
+                continue
+            try:
+                proc = subprocess.run(
+                    [candidate, "-c", test_code],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=20,
+                )
+            except Exception:
+                continue
+            if proc.returncode == 0:
+                version = proc.stdout.strip() or "unknown"
+                self._emit(f"KISS-ICP direct Python: {candidate} (version {version})")
+                return candidate
+
+        setup = self.project_dir.parent / "scripts" / "setup_kiss_icp_python.sh"
+        raise RuntimeError(
+            "Direct Python KISS-ICP environment is not available.\n"
+            "Run this once, then restart the GUI:\n"
+            f"  chmod +x {setup}\n"
+            f"  {setup}"
+        )
+
+
     def _find_trajectopy_python(self):
         """Find a Python interpreter with the modern Trajectopy API.
 
@@ -213,6 +293,10 @@ class PipelineWorker(QObject):
             cache_dir.mkdir(exist_ok=True)
             sensor_bag = cache_dir / f"{dataset_name}_sensor.bag"
             sensor_bag_meta = cache_dir / f"{dataset_name}_sensor.meta.json"
+            needs_ros_sensor = any(
+                a.get("result_mode", "odometry_topic") != "kiss_python"
+                for a in self.algorithms
+            )
 
             self.progress.emit(3, "Validating dataset")
             for key in ("pcap", "metadata", "sbg"):
@@ -277,71 +361,77 @@ class PipelineWorker(QObject):
                 "algorithms": [a.get("name", a.get("id", "")) for a in self.algorithms],
             }, indent=2), encoding="utf-8")
 
-            # Reuse a converted sensor bag only when it was produced from the
-            # exact same input files.  Dataset name alone is not a safe cache key.
-            input_fingerprint = {}
-            for key in ("pcap", "metadata", "sbg"):
-                p = Path(os.path.expanduser(self.dataset[key])).resolve()
-                st = p.stat()
-                input_fingerprint[key] = {
-                    "path": str(p),
-                    "size": int(st.st_size),
-                    "mtime_ns": int(st.st_mtime_ns),
-                }
+            if needs_ros_sensor:
+                # Reuse a converted sensor bag only when it was produced from the
+                # exact same input files.  Dataset name alone is not a safe cache key.
+                input_fingerprint = {}
+                for key in ("pcap", "metadata", "sbg"):
+                    p = Path(os.path.expanduser(self.dataset[key])).resolve()
+                    st = p.stat()
+                    input_fingerprint[key] = {
+                        "path": str(p),
+                        "size": int(st.st_size),
+                        "mtime_ns": int(st.st_mtime_ns),
+                    }
 
-            reuse = bool(self.options.get("reuse_sensor_bag", True))
-            cache_valid = False
-            if reuse and sensor_bag.exists() and sensor_bag_meta.exists():
-                try:
-                    cached = json.loads(sensor_bag_meta.read_text(encoding="utf-8"))
-                    cache_valid = cached.get("inputs") == input_fingerprint
-                except Exception:
-                    cache_valid = False
+                reuse = bool(self.options.get("reuse_sensor_bag", True))
+                cache_valid = False
+                if reuse and sensor_bag.exists() and sensor_bag_meta.exists():
+                    try:
+                        cached = json.loads(sensor_bag_meta.read_text(encoding="utf-8"))
+                        cache_valid = cached.get("inputs") == input_fingerprint
+                    except Exception:
+                        cache_valid = False
 
-            if cache_valid:
-                self.progress.emit(10, "Reusing synchronized sensor bag")
-                self._emit(f"Reusing validated cached sensor bag: {sensor_bag}")
+                if cache_valid:
+                    self.progress.emit(10, "Reusing synchronized sensor bag")
+                    self._emit(f"Reusing validated cached sensor bag: {sensor_bag}")
+                else:
+                    if reuse and sensor_bag.exists():
+                        self._emit("Cached sensor bag does not match current input files; rebuilding it.")
+                    self.progress.emit(8, "Converting Ouster LiDAR")
+                    lidar = self.project_dir / "ouster_to_bag.py"
+                    cmd = (
+                        f"python3 {shlex.quote(str(lidar))} "
+                        f"--pcap {shlex.quote(self.dataset['pcap'])} "
+                        f"--metadata {shlex.quote(self.dataset['metadata'])} "
+                        f"--output {shlex.quote(str(sensor_bag))}"
+                    )
+                    self._run(cmd, run_dir)
+
+                    self.progress.emit(18, "Converting SBG IMU")
+                    imu = self.project_dir / "sbg_to_bag.py"
+                    cmd = (
+                        f"python3 {shlex.quote(str(imu))} "
+                        f"--sbg {shlex.quote(self.dataset['sbg'])} "
+                        f"--append-to {shlex.quote(str(sensor_bag))}"
+                    )
+                    self._run(cmd, run_dir)
+                    sensor_bag_meta.write_text(
+                        json.dumps({"inputs": input_fingerprint}, indent=2),
+                        encoding="utf-8",
+                    )
+
             else:
-                if reuse and sensor_bag.exists():
-                    self._emit("Cached sensor bag does not match current input files; rebuilding it.")
-                self.progress.emit(8, "Converting Ouster LiDAR")
-                lidar = self.project_dir / "ouster_to_bag.py"
-                cmd = (
-                    f"python3 {shlex.quote(str(lidar))} "
-                    f"--pcap {shlex.quote(self.dataset['pcap'])} "
-                    f"--metadata {shlex.quote(self.dataset['metadata'])} "
-                    f"--output {shlex.quote(str(sensor_bag))}"
-                )
-                self._run(cmd, run_dir)
+                self.progress.emit(20, "KISS-ICP direct mode: skipping ROS sensor bag")
+                self._emit("No ROS-based algorithm selected; PCAP will be processed directly.")
 
-                self.progress.emit(18, "Converting SBG IMU")
-                imu = self.project_dir / "sbg_to_bag.py"
-                cmd = (
-                    f"python3 {shlex.quote(str(imu))} "
-                    f"--sbg {shlex.quote(self.dataset['sbg'])} "
-                    f"--append-to {shlex.quote(str(sensor_bag))}"
-                )
-                self._run(cmd, run_dir)
-                sensor_bag_meta.write_text(
-                    json.dumps({"inputs": input_fingerprint}, indent=2),
-                    encoding="utf-8",
-                )
+            if needs_ros_sensor:
+                self.progress.emit(25, "Preparing ROS")
+                started_roscore = self._ensure_roscore(run_dir)
 
-            self.progress.emit(25, "Preparing ROS")
-            started_roscore = self._ensure_roscore(run_dir)
+                # Preserve /use_sim_time when reusing a user's ROS master.
+                try:
+                    out = subprocess.check_output(
+                        ["bash", "-lc", self._ros_prefix() + "rosparam get /use_sim_time 2>/dev/null || true"],
+                        text=True
+                    ).strip()
+                    if out in ("true", "false"):
+                        previous_use_sim_time = out
+                except Exception:
+                    pass
 
-            # Preserve /use_sim_time when reusing a user's ROS master.
-            try:
-                out = subprocess.check_output(
-                    ["bash", "-lc", self._ros_prefix() + "rosparam get /use_sim_time 2>/dev/null || true"],
-                    text=True
-                ).strip()
-                if out in ("true", "false"):
-                    previous_use_sim_time = out
-            except Exception:
-                pass
-
-            self._run("rosparam set /use_sim_time true", run_dir, stream=False)
+                self._run("rosparam set /use_sim_time true", run_dir, stream=False)
 
             estimates = []
             total = len(self.algorithms)
@@ -350,8 +440,41 @@ class PipelineWorker(QObject):
                     raise RuntimeError("Run stopped by user.")
                 alg_id = self._safe_id(alg["id"])
                 name = alg["name"]
-                topic = alg["odom_topic"]
-                launch_cmd = alg["launch_command"].strip()
+                topic = alg.get("odom_topic", "")
+                result_mode = alg.get("result_mode", "odometry_topic")
+
+                if result_mode == "kiss_python":
+                    self.progress.emit(base, f"Running {name} directly on Ouster PCAP")
+                    kiss_python = self._find_kiss_python()
+                    direct_runner = self.project_dir / "kiss_icp_direct.py"
+                    config_path = self.project_dir.parent / "config" / "kiss-icp" / "config.yml"
+                    traj = run_dir / f"{alg_id}.traj"
+                    metrics_out = run_dir / f"{alg_id}_direct_metrics.json"
+                    direct_log = run_dir / f"{alg_id}.log"
+                    cmd = (
+                        f"{shlex.quote(kiss_python)} {shlex.quote(str(direct_runner))} "
+                        f"--pcap {shlex.quote(str(Path(self.dataset['pcap']).resolve()))} "
+                        f"--metadata {shlex.quote(str(Path(self.dataset['metadata']).resolve()))} "
+                        f"--config {shlex.quote(str(config_path))} "
+                        f"--output {shlex.quote(str(traj))} "
+                        f"--metrics-out {shlex.quote(str(metrics_out))}"
+                    )
+                    output = self._run_plain(cmd, run_dir)
+                    direct_log.write_text(output + "\n", encoding="utf-8")
+                    if not traj.is_file():
+                        raise RuntimeError(f"{name} direct runner did not create {traj}")
+
+                    estimates.append({
+                        "id": alg_id,
+                        "name": name,
+                        "bag": "",
+                        "topic": "",
+                        "traj": str(traj),
+                        "backend": "direct_python",
+                    })
+                    continue
+
+                launch_cmd = alg.get("launch_command", "").strip()
                 if not launch_cmd:
                     raise RuntimeError(f"{name} has no launch command. Configure it in Algorithms.")
 
