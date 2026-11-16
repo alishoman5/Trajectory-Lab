@@ -12,17 +12,17 @@ mkdir -p "$SRC"
 echo "KISS-ICP ROS1 setup"
 echo "Workspace: $WS"
 
-# Reuse an already discoverable ROS package when present.
-if rospack find kiss_icp >/dev/null 2>&1; then
-  FOUND="$(rospack find kiss_icp)"
-  echo "Existing kiss_icp package found: $FOUND"
+# Prefer the managed checkout in this workspace and pin it to the last ROS1
+# release so the launch file and parameters used by Trajectory Lab are stable.
+if [[ -d "$TARGET/.git" ]]; then
+  echo "Existing managed KISS-ICP checkout found: $TARGET"
+  git -C "$TARGET" fetch --tags --depth 1 origin "$TAG"
+  git -C "$TARGET" checkout -f "$TAG"
+elif [[ -e "$TARGET" ]]; then
+  echo "ERROR: $TARGET exists but is not a git checkout." >&2
+  echo "Move/remove it, then rerun this script." >&2
+  exit 1
 else
-  if [[ -e "$TARGET" ]]; then
-    echo "ERROR: $TARGET exists but kiss_icp is not discoverable." >&2
-    echo "Move/remove that directory or build the existing checkout manually." >&2
-    exit 1
-  fi
-
   echo "Cloning official PRBonn/kiss-icp $TAG (last ROS1 release)..."
   git clone --depth 1 --branch "$TAG" https://github.com/PRBonn/kiss-icp.git "$TARGET"
 fi
@@ -37,6 +37,6 @@ PKG="$(rospack find kiss_icp)"
 echo
 echo "KISS-ICP ready: $PKG"
 echo "Trajectory Lab launch profile:"
-echo "  roslaunch kiss_icp odometry.launch topic:=/points_raw visualize:=false publish_odom_tf:=false"
+echo "  roslaunch kiss_icp odometry.launch topic:=/points_raw visualize:=false publish_odom_tf:=false min_range:=1.0 max_range:=100.0 deskew:=true"
 echo "Odometry topic:"
 echo "  /kiss/odometry"
