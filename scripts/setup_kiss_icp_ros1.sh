@@ -37,6 +37,6 @@ PKG="$(rospack find kiss_icp)"
 echo
 echo "KISS-ICP ready: $PKG"
 echo "Trajectory Lab launch profile:"
-echo "  roslaunch kiss_icp odometry.launch topic:=/points_raw visualize:=false publish_odom_tf:=false min_range:=1.0 max_range:=50.0 voxel_size:=0.5 deskew:=false"
+echo "  roslaunch kiss_icp odometry.launch topic:=/points_raw visualize:=false publish_odom_tf:=false deskew:=true max_range:=100.0 min_range:=0.0 voxel_size:=1.0"
 echo "Odometry topic:"
 echo "  /kiss/odometry"
