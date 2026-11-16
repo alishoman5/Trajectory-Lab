@@ -224,6 +224,13 @@ class AlgorithmDialog(QDialog):
         self.setWindowTitle("Algorithm profile")
         self.resize(620, 320)
         alg = alg or {}
+        self._extra = {
+            k: v for k, v in alg.items()
+            if k not in {
+                "id", "name", "launch_command", "odom_topic",
+                "startup_delay", "configured", "description"
+            }
+        }
         form = QFormLayout(self)
 
         self.name = QLineEdit(alg.get("name", ""))
@@ -250,15 +257,18 @@ class AlgorithmDialog(QDialog):
 
     def data(self):
         alg_id = self.alg_id.text().strip() or self.name.text().lower().replace(" ", "_")
-        return {
+        direct = self._extra.get("result_mode") == "kiss_python"
+        data = {
             "id": alg_id,
             "name": self.name.text().strip() or alg_id,
             "launch_command": self.command.text().strip(),
             "odom_topic": self.topic.text().strip(),
             "startup_delay": float(self.delay.value()),
-            "configured": bool(self.command.text().strip() and self.topic.text().strip()),
+            "configured": bool(direct or (self.command.text().strip() and self.topic.text().strip())),
             "description": self.desc.text().strip(),
         }
+        data.update(self._extra)
+        return data
 
 
 class MainWindow(QMainWindow):
@@ -694,13 +704,19 @@ class MainWindow(QMainWindow):
             grid = QGridLayout(box)
             check = QCheckBox("Select for run")
             check.setChecked(alg["id"] == "lio_sam")
-            status = QLabel("Configured" if alg.get("launch_command") and alg.get("odom_topic") else "Needs setup")
-            status.setStyleSheet("color:#7dd3a7;" if "Configured" in status.text() else "color:#e6b76a;")
+            direct_python = alg.get("result_mode") == "kiss_python"
+            configured = direct_python or bool(alg.get("launch_command") and alg.get("odom_topic"))
+            status = QLabel("Direct Python" if direct_python else ("Configured" if configured else "Needs setup"))
+            status.setStyleSheet("color:#7dd3a7;" if configured else "color:#e6b76a;")
             desc = QLabel(alg.get("description", ""))
             desc.setWordWrap(True)
-            cmd = QLabel("Launch: " + (alg.get("launch_command") or "—"))
+            if direct_python:
+                cmd = QLabel("Backend: direct Python KISS-ICP (PCAP + metadata)")
+                topic = QLabel("Output: trajectory file directly (no ROS / no rosbag)")
+            else:
+                cmd = QLabel("Launch: " + (alg.get("launch_command") or "—"))
+                topic = QLabel("Odometry: " + (alg.get("odom_topic") or "—"))
             cmd.setObjectName("subtitle")
-            topic = QLabel("Odometry: " + (alg.get("odom_topic") or "—"))
             topic.setObjectName("subtitle")
             edit = QPushButton("Configure")
             edit.clicked.connect(lambda checked, a=alg: self.edit_algorithm(a))
@@ -810,12 +826,18 @@ class MainWindow(QMainWindow):
         algs = self.selected_algorithms()
         names = ", ".join(a["name"] for a in algs) or "none"
         reference = "RTS Ground Truth" if self.rts.text() else "SBG GNSS fallback"
+        only_direct = bool(algs) and all(a.get("result_mode") == "kiss_python" for a in algs)
+        sensor_line = (
+            "KISS-ICP input: direct Ouster PCAP (no ROS / no rosbag)"
+            if only_direct else
+            f"ROS sensor bag: {'reuse cache when available' if self.reuse_bag.isChecked() else 'rebuild every run'}"
+        )
         self.run_summary.setText(
             f"Dataset: {self.dataset_name.text().strip() or 'dataset'}\n"
             f"Reference: {reference}\n"
             f"Algorithms: {names}\n"
             f"RPE distance buckets: {self.rpe_min.value():.1f}–{self.rpe_max.value():.1f} m, step {self.rpe_step.value():.1f} m\n"
-            f"Sensor bag conversion: {'reuse cache when available' if self.reuse_bag.isChecked() else 'rebuild every run'}"
+            f"{sensor_line}"
         )
 
     def start_run(self):
@@ -828,7 +850,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Algorithms", "Select at least one algorithm.")
             self.change_page(1)
             return
-        unconfigured = [a["name"] for a in selected if not a.get("launch_command") or not a.get("odom_topic")]
+        unconfigured = [
+            a["name"] for a in selected
+            if a.get("result_mode") != "kiss_python"
+            and (not a.get("launch_command") or not a.get("odom_topic"))
+        ]
         if unconfigured:
             QMessageBox.warning(self, "Algorithms", "Configure these profiles first:\n" + "\n".join(unconfigured))
             self.change_page(1)
