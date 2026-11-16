@@ -20,11 +20,11 @@
   {
     "id": "kiss_icp",
     "name": "KISS-ICP",
-    "launch_command": "roslaunch kiss_icp odometry.launch topic:=/points_raw visualize:=false publish_odom_tf:=false min_range:=1.0 max_range:=50.0 voxel_size:=0.5 deskew:=false",
+    "launch_command": "roslaunch kiss_icp odometry.launch topic:=/points_raw visualize:=false publish_odom_tf:=false deskew:=true max_range:=100.0 min_range:=0.0 voxel_size:=1.0",
     "odom_topic": "/kiss/odometry",
     "startup_delay": 3,
     "configured": true,
-    "description": "KISS-ICP ROS1 v0.3.0 | Ouster OS1-128 walking profile | range 1-50m, voxel 0.5m, deskew off, remaining parameters defaults"
+    "description": "KISS-ICP ROS1 v0.3.0 | config.yml profile: deskew=true, range=0-100m, voxel=1.0m, adaptive threshold defaults"
   },
   {
     "id": "hdl_graph_slam",
