@@ -330,7 +330,7 @@ class PipelineWorker(QObject):
                     f"--metadata-out {shlex.quote(str(reference_meta_path))} "
                     f"--rate-hz 10"
                 )
-                self._run(cmd, run_dir)
+                self._run_plain(cmd, run_dir)
                 if not reference_path.is_file():
                     raise RuntimeError("SBG GNSS fallback did not create a reference trajectory.")
                 if reference_meta_path.is_file():
@@ -442,6 +442,7 @@ class PipelineWorker(QObject):
                 name = alg["name"]
                 topic = alg.get("odom_topic", "")
                 result_mode = alg.get("result_mode", "odometry_topic")
+                base = 28 + int((idx / max(total, 1)) * 50)
 
                 if result_mode == "kiss_python":
                     self.progress.emit(base, f"Running {name} directly on Ouster PCAP")
@@ -487,7 +488,6 @@ class PipelineWorker(QObject):
                     + launch_cmd
                 )
 
-                base = 28 + int((idx / max(total, 1)) * 50)
                 self.progress.emit(base, f"Starting {name}")
                 alg_log = run_dir / f"{alg_id}.log"
                 alg_proc = self._start_background(launch_cmd, alg_log, run_dir)
@@ -602,7 +602,7 @@ class PipelineWorker(QObject):
                 f"--rpe-step {float(self.options.get('rpe_step', 5.0))} "
                 f"--rpe-all-pairs {1 if self.options.get('rpe_all_pairs', True) else 0}"
             )
-            self._run(compare_cmd, run_dir)
+            self._run_plain(compare_cmd, run_dir)
 
             metrics_file = results_dir / "summary_metrics.json"
             metrics = json.loads(metrics_file.read_text())
@@ -624,7 +624,7 @@ class PipelineWorker(QObject):
                         f"--output-root {shlex.quote(str(root_out))} "
                         f"--sbg {shlex.quote(str(Path(self.dataset['sbg']).resolve()))}"
                     )
-                    self._run(diagnostic_cmd, run_dir)
+                    self._run_plain(diagnostic_cmd, run_dir)
                     diagnostic_file = results_dir / "performance_analysis.json"
                     if diagnostic_file.exists():
                         diagnostics = json.loads(diagnostic_file.read_text())
