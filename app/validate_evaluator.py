@@ -180,10 +180,14 @@ def profile_checks():
     require(all(ids), "every algorithm profile must have an id")
     require(len(ids) == len(set(ids)), "algorithm profile ids must be unique")
     for p in profiles:
-        if p.get("configured", False):
+        mode = p.get("result_mode", "odometry_topic")
+        if p.get("configured", False) and mode != "kiss_python":
             require(bool(p.get("launch_command")), f"{p['id']} has no launch command")
             require(bool(p.get("odom_topic")), f"{p['id']} has no odometry topic")
-        if p.get("result_mode") == "hdl_graph_dump":
+        if mode == "kiss_python":
+            require(p.get("id") == "kiss_icp", "kiss_python mode is reserved for KISS-ICP")
+            require(bool(p.get("config_path")), "direct KISS-ICP profile needs config_path")
+        if mode == "hdl_graph_dump":
             require(bool(p.get("optimized_topic")), "HDL graph-dump profile needs optimized_topic")
     return profiles
 
